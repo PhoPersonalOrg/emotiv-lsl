@@ -28,10 +28,7 @@
 	"settings": {
 		"workbench.colorCustomizations": {
 			"editor.lineHighlightBackground": "#16cf102d",
-			"editor.lineHighlightBorder": "#9fd1a71f",
-			"activityBar.background": "#195800",
-			"titleBar.activeBackground": "#077a1a",
-			"titleBar.activeForeground": "#FFFAFF"
+			"editor.lineHighlightBorder": "#9fd1a71f"
 		},
 		"powershell.cwd": "emotiv-lsl",
 		"terminal.integrated.profiles.linux": {

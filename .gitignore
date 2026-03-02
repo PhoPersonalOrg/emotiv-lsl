@@ -17,3 +17,4 @@ emotiv-lsl.7z
 .cursorignore*
 .cursorindexingignore*
 .specstory
+templating/uv_deps_switcher/backups
