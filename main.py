@@ -3,6 +3,8 @@ import os
 import sys
 import platform
 
+is_windows: bool = False
+
 # Add the directory containing the HIDAPI DLL on Windows only
 if sys.platform == "win32":
     arch_dir = "x64" if platform.architecture()[0] == "64bit" else "x86"
@@ -10,6 +12,7 @@ if sys.platform == "win32":
     dll_dir = os.path.join(project_root, "hidapi-win", arch_dir)
     if os.path.isdir(dll_dir):
         os.add_dll_directory(dll_dir)
+    is_windows = True
 
 # Hint the loader about bundled hidapi on macOS when frozen
 if sys.platform == "darwin" and getattr(sys, 'frozen', False):
@@ -56,8 +59,15 @@ if __name__ == "__main__":
     # logger.error("error → console + file")
 
     # logging.basicConfig(filename="logs_and_notes/logs/decode_tracing.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    enable_electrode_quality_stream: bool = False
+    enable_motion_data: bool = False
 
-    emotiv_epoc_x = EmotivEpocX()
+    if is_windows:
+        print(f'platform is_windows, enabling motion and quality stream...')
+        enable_electrode_quality_stream: bool = True
+        enable_motion_data: bool = True
+
+    emotiv_epoc_x = EmotivEpocX(enable_motion_data=enable_motion_data, enable_electrode_quality_stream=enable_electrode_quality_stream)
     crypto_key = emotiv_epoc_x.get_crypto_key()
     print(f'crypto_key: {crypto_key}')
     emotiv_epoc_x.main_loop()

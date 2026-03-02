@@ -1,6 +1,6 @@
 [project]
 name = "emotiv-lsl"
-version = "0.1.5"
+version = "0.1.6"
 description = "LSL server for Emotiv EPOC X, much more modern than others (~2025) "
 readme = "README.md"
 requires-python = ">=3.9.13"
@@ -18,8 +18,8 @@ dependencies = [
     "seaborn>=0.13.2",
     "setuptools>=75.3.2,<81",
     "wheel>=0.45.1",
-    "pyqt5>=5.15.7,<6",
-    "pyqt5-qt5==5.15.2",
+    "pyqt5>=5.15.7,<6; platform_machine != 'aarch64' or sys_platform != 'linux'",
+    "pyqt5-qt5==5.15.2; platform_machine != 'aarch64' or sys_platform != 'linux'",
     "pyshark>=0.6",
     "scipy>=1.10.1",
     "attrs>=22.2.0",
@@ -33,8 +33,18 @@ dependencies = [
 ]
 
 [tool.uv.sources]
+phopylslhelper = { path = "../PhoPyLSLhelper", editable = true }
+lab-recorder-python = { path = "../lab-recorder-python", editable = true }
+bsl = { path = "../bsl", editable = true }
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-aarch64", "osx-64", "linux-64"]
+
+[tool.pixi.target.win-64.dependencies]
+liblsl = "*"
+
+[tool.pixi.pypi-dependencies]
 phopylslhelper = { git = "https://github.com/CommanderPho/phopylslhelper.git" }
 lab-recorder-python = { path = "../lab-recorder-python", editable = true }
-
-
 
