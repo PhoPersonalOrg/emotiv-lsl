@@ -1,0 +1,119 @@
+# Build self-contained executables for emotiv-lsl on Windows, macOS, and Linux.
+#
+# Non-Python dependency strategy
+# ─────────────────────────────
+# liblsl:
+#   Modern pylsl wheels (≥1.14) ship a bundled liblsl binary.
+#   PyInstaller's collect_dynamic_libs('pylsl') picks it up automatically from
+#   inside the wheel directory, so no separate liblsl install is required on
+#   any platform.
+#
+# hidapi:
+#   The `hid` Python package (ctypes wrapper) loads the native hidapi library
+#   at runtime.  We install the native library via each platform's package
+#   manager before invoking PyInstaller so the library is present both when
+#   PyInstaller analyses imports *and* in the final frozen binary (bundled
+#   explicitly in main.spec).
+#
+#   • Linux  – libhidapi-dev / libhidapi-hidraw0 via apt
+#   • macOS  – hidapi via Homebrew
+#   • Windows– hidapi.dll already committed to the repo at hidapi-win/x64/
+#              (main.py registers it via os.add_dll_directory at startup)
+
+name: Build Executables
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: emotiv_lsl-linux
+          - os: windows-latest
+            artifact: emotiv_lsl-windows
+          - os: macos-13
+            artifact: emotiv_lsl-macos
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ── Native non-Python dependencies ─────────────────────────────────────
+      # liblsl is bundled by the pylsl wheel; no separate install needed.
+      # Only hidapi requires a system-level install on Linux and macOS.
+
+      - name: Install hidapi (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libhidapi-dev libhidapi-hidraw0 libhidapi-libusb0
+
+      - name: Install hidapi (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install hidapi
+          # Expose the Homebrew lib dir so ctypes/hid can load libhidapi at
+          # analysis time (needed when PyInstaller imports the hid module).
+          BREW_PREFIX="$(brew --prefix)"
+          echo "DYLD_LIBRARY_PATH=${BREW_PREFIX}/lib:${DYLD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=${BREW_PREFIX}/lib:/usr/lib:/usr/local/lib" >> "$GITHUB_ENV"
+
+      # Windows: expose the bundled hidapi.dll to the Python process and to
+      # PyInstaller's dependency scanner via PATH.
+      - name: Add hidapi-win to PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dllDir = (Resolve-Path "hidapi-win\x64").Path
+          "$dllDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "Added to PATH: $dllDir"
+
+      # ── Python dependencies ────────────────────────────────────────────────
+      # Install only the packages needed to build the core binary.
+      # Heavy optional deps (mne, bsl, matplotlib, Qt, …) are deliberately
+      # excluded to keep build times short.
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pycryptodome attrs numpy
+          pip install git+https://github.com/CommanderPho/phopylslhelper.git
+          pip install hid==1.0.4
+
+      # ── Build ──────────────────────────────────────────────────────────────
+      - name: Build executable (Linux)
+        if: runner.os == 'Linux'
+        run: python scripts/build_linux_exe.py
+
+      - name: Build executable (macOS)
+        if: runner.os == 'macOS'
+        run: python scripts/build_macOS_app.py
+
+      - name: Build executable (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/build_exe.py
+
+      # ── Upload artifacts ───────────────────────────────────────────────────
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          if-no-files-found: warn
