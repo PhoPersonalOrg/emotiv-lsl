@@ -61,7 +61,7 @@ if __name__ == "__main__":
     # logging.basicConfig(filename="logs_and_notes/logs/decode_tracing.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     # enable_electrode_quality_stream: bool = False
     # enable_motion_data: bool = False
-    
+
     enable_electrode_quality_stream: bool = True
     enable_motion_data: bool = True
 
