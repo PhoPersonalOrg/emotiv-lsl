@@ -53,6 +53,18 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE hidapi_winapi lsl)
+    
+    # Copy DLLs to the output directory on Windows
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:hidapi_winapi>
+        $<TARGET_FILE_DIR:${PROJECT_NAME}>
+    )
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:lsl>
+        $<TARGET_FILE_DIR:${PROJECT_NAME}>
+    )
 elseif(APPLE)
     target_link_libraries(${PROJECT_NAME} PRIVATE hidapi_darwin lsl)
 else()

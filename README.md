@@ -443,3 +443,45 @@ sudo apt install -y liblsl2 liblsl-dev
 ldconfig -p | grep liblsl
 
 ```
+
+# C++ Implementation
+
+A high-performance C++ version of the `emotiv_lsl` server is available in the `cpp` directory. It uses `hidapi`, `liblsl`, and `tiny-AES-c` to directly interface with Emotiv headsets via USB, decrypt the data streams, and publish them to LSL, without the overhead of Python.
+
+## Building the C++ Port
+
+The C++ port is managed via CMake and handles dependency downloading automatically.
+
+### Prerequisites
+- CMake (version 3.14 or higher)
+- A C++17 compatible compiler (MSVC, GCC, or Clang)
+- Git (for `FetchContent` to download dependencies)
+
+### Configuration and Build
+From the root of the repository, navigate to the `cpp` directory and build:
+
+```bash
+cd cpp
+
+# Generate the build files
+cmake -B build
+
+# Build the executable (Release configuration is recommended for performance)
+cmake --build build --config Release
+```
+
+## Running the C++ Server
+
+Once built, connect your Emotiv headset dongle and run the generated executable:
+
+**On Windows:**
+```powershell
+.\build\Release\emotiv_lsl_cpp.exe
+```
+
+**On Linux / macOS:**
+```bash
+./build/emotiv_lsl_cpp
+```
+
+The C++ server will automatically connect to the headset and start streaming EEG, Motion, and Sensor Quality data to LSL. You can use standard tools like `bsl_stream_viewer` to visualize the incoming data.
