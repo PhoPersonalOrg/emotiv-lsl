@@ -88,6 +88,7 @@
 		},
 		"search.exclude": {
 			"**/__pycache__": true
-		}
+		},
+		"specstory.cloudSync.enabled": "never"
 	}
 }
