@@ -1994,8 +1994,8 @@ packages:
   requires_python: '>=3.10'
 - pypi: ../lab-recorder-python
   name: lab-recorder-python
-  version: 0.2.2
-  sha256: ec8c64b40dae2c632ecd1c8805a72642d692468f361d33c68471a825698a718d
+  version: 0.3.0
+  sha256: 06371d1f1d9c2e31c7356883358b8782b8e17efb91f97f92fa587f00ead52910
   requires_dist:
   - numpy>=2.0.2
   - pyinstaller>=6.16.0
