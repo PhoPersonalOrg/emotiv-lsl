@@ -132,29 +132,39 @@ class EmotivBase(EasyTimeSyncParsingMixin):
 
     ## CyKit Conversion/Decoding/Data Packet Parsing Functions
     def convertEPOC_PLUS(self, value_1, value_2):
+        # Legacy CyKit string math ≈ little-endian uint16 / 7.8 (Android 16-bit ADC).
+        # Epoc X Mode-7 hot path uses explicit LE16 + /7.8 instead; kept for Epoc+.
         edk_value = "%.8f" % (((int(value_1) * .128205128205129) + 4201.02564096001) + ((int(value_2) - 128) * 32.82051289))
         return edk_value
-    
-    # In the EEG class, add a method to extract quality values
-    def extractQualityValues(self, data, return_as_array: bool=True) -> Union[np.ndarray, Dict[str, float]]:
-        # Quality values are typically in specific bytes of the data packet
-        # For EPOC/EPOC+, quality values are often in data[16] and data[17]
+
+    def extractQualityValues(self, data, return_as_array: bool=True) -> Union[np.ndarray, Dict[str, float], None]:
+        """Contact quality from a decrypted package.
+
+        KeyModel 8 (Epoc X Mode-7): CQ = word7 & 0x7f when type==0x10 (broadcast).
+        Older models: CyKit nibble scrape of bytes 16–22.
+        """
+        import struct
+
         quality_values_dict = {}
 
-        # Different models store quality data differently
         if self.KeyModel == 2 or self.KeyModel == 1:  # Epoc
-            # Extract quality values for each channel
-            # This is a simplified example - actual implementation depends on the device's data format
-            quality_values_dict = {'AF3': data[16] & 0xF, 'F7': (data[16] >> 4) & 0xF, 
+            quality_values_dict = {'AF3': data[16] & 0xF, 'F7': (data[16] >> 4) & 0xF,
                             'F3': data[17] & 0xF, 'FC5': (data[17] >> 4) & 0xF,
                             'T7': data[18] & 0xF, 'P7': (data[18] >> 4) & 0xF,
                             'O1': data[19] & 0xF, 'O2': (data[19] >> 4) & 0xF,
                             'P8': data[20] & 0xF, 'T8': (data[20] >> 4) & 0xF,
                             'FC6': data[21] & 0xF, 'F4': (data[21] >> 4) & 0xF,
                             'F8': data[22] & 0xF, 'AF4': (data[22] >> 4) & 0xF}
-        elif (self.KeyModel == 6) or (self.KeyModel == 5) or (self.KeyModel == 8):  # Epoc+ or EpocX
-            # Similar extraction for EPOC+
-            quality_values_dict = {'AF3': data[16] & 0xF, 'F7': (data[16] >> 4) & 0xF, 
+        elif self.KeyModel == 8:  # Epoc X Mode-7 — Android EpocPlusMode CQ
+            if data is None or len(data) < 32:
+                return None
+            if (data[1] & 0x7F) != 0x10:
+                return None
+            words = struct.unpack_from("<15H", bytes(data), 2)
+            cq = float(words[7] & 0x7F)
+            quality_values_dict = {name: cq for name in self.eeg_channel_names}
+        elif (self.KeyModel == 6) or (self.KeyModel == 5):  # Epoc+
+            quality_values_dict = {'AF3': data[16] & 0xF, 'F7': (data[16] >> 4) & 0xF,
                             'F3': data[17] & 0xF, 'FC5': (data[17] >> 4) & 0xF,
                             'T7': data[18] & 0xF, 'P7': (data[18] >> 4) & 0xF,
                             'O1': data[19] & 0xF, 'O2': (data[19] >> 4) & 0xF,
@@ -165,10 +175,8 @@ class EmotivBase(EasyTimeSyncParsingMixin):
             raise NotImplementedError(self.KeyModel)
 
         if return_as_array and (quality_values_dict is not None):
-            return np.array([quality_values_dict[k] for k in self.eeg_channel_names]) ## ensures consistent channel order
-        else:
-            # returnt he dict
-            return quality_values_dict
+            return np.array([quality_values_dict[k] for k in self.eeg_channel_names])
+        return quality_values_dict
         
 
 
@@ -229,8 +237,8 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                 # decoded = self.decode_data(data)
                     
                 if decoded is not None:
-                    # Check if this is motion data (based on number of channels)
-                    if len(decoded) == 6:
+                    # Motion: Android Q0–Q3 + ACC + MAG (10 ch). Legacy CyKit 6-ch gyro removed.
+                    if len(decoded) == 10:
                         if self.enable_motion_data:
                             if self.enable_debug_logging:
                                 logger.debug(f"Packet #{packet_count}: Motion data decoded, {len(decoded)} channels")

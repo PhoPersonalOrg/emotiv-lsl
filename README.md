@@ -4,6 +4,12 @@
 ## Description
 LSL (Lab Streaming Layer) server for the Emotiv EPOC X headset, based on the original [CyKit] and [emotiv] (https://github.com/vtr0n/emotiv-lsl) project. This project allows acquiring, reading, and exporting raw data from the headset.
 
+### Epoc X decode notes
+- EEG path is aligned to EmotivPRO Android **Mode 7** (EpocPlus LE16 + `getRawEegId` remap + ADC ÷7.8). Transport remains **USB HID**.
+- Crypto uses Version2 **EpocXMode** (XOR `0x55` → AES-128-ECB). Firmware V4 / `findKey` is unsupported.
+- Motion LSL defaults off; a 20-byte Android Q/ACC/MAG decoder is present for when HID/BLE exposes that report.
+- Offline checks: `pixi run python -m tests.test_epoc_x_decode`
+
 ---
 
 ## Prerequisites

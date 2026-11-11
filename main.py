@@ -156,12 +156,13 @@ def run_emotiv_loop():
     )
 
     enable_electrode_quality_stream: bool = True
-    enable_motion_data: bool = True
+    # Motion LSL stays off until a real 20-byte HID/BLE motion report is confirmed.
+    # CyKit data[1]==32 gyro fiction removed; Android Q/ACC/MAG decoder is ready.
+    enable_motion_data: bool = False
 
     if is_windows:
-        print(f'platform is_windows, enabling motion and quality stream...')
+        print(f'platform is_windows, enabling quality stream (motion still gated)...')
         enable_electrode_quality_stream: bool = True
-        enable_motion_data: bool = True
 
     emotiv_epoc_x = EmotivEpocX(enable_motion_data=enable_motion_data, enable_electrode_quality_stream=enable_electrode_quality_stream)
     crypto_key = emotiv_epoc_x.get_crypto_key()

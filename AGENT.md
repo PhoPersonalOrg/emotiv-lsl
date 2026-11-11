@@ -16,6 +16,13 @@
 - **Encryption**: AES decryption using device serial-based crypto keys
 - **Dependencies**: Python 3.8+, hidapi, pycryptodome, pylsl, mne, matplotlib
 
+## Epoc X decode (Android-aligned)
+- EEG decode mirrors EmotivPRO Android Mode 7 (EpocPlus LE16 + `getRawEegId` remap + ADC ÷7.8).
+- Crypto: Version2 EpocXMode key schedule; XOR `0x55` → AES-128-ECB. V4/`findKey` unsupported.
+- Transport remains USB HID only (no BLE GATT stack here). BLE checklist lives in the reverse-engineer protocol memory (`epocx-ble-protocol.md`).
+- Motion: Android 20 B BE Q/ACC/MAG decoder exists; LSL motion defaults off until a real 20 B HID report is confirmed.
+- Offline checks: `python -m tests.test_epoc_x_decode`
+
 ## Code Style
 - **Imports**: Standard library first, then third-party (hid, pylsl, Crypto), then local imports
 - **Classes**: CamelCase (EmotivEpocX), inherit from EmotivBase
