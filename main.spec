@@ -115,7 +115,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=binaries,
-    datas=[],
+    datas=[('images/icons/emotiv_lsl_icon_design.ico', 'images/icons')],
     hiddenimports=['pylsl', 'hid'],
     hookspath=[],
     hooksconfig={},

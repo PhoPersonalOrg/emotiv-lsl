@@ -65,6 +65,108 @@ console_visible = True
 _console_wndproc = None
 _old_console_wndproc = None
 
+TRAY_TITLE_NORMAL = "Emotiv LSL Server"
+TRAY_TITLE_DISCONNECTED = "Emotiv LSL — headset disconnected"
+FLASH_INTERVAL_SEC = 0.5
+
+_alert_active = False
+_alert_lock = threading.Lock()
+_flash_stop = threading.Event()
+_flash_thread = None
+_tray_icon = None
+_icon_normal = None
+_icon_alert = None
+
+
+def resource_path(*parts: str) -> str:
+    """Resolve a resource path for both source runs and frozen PyInstaller builds."""
+    if getattr(sys, "frozen", False):
+        base_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, *parts)
+
+
+def load_tray_icons():
+    """Load the normal tray icon and a red-tinted alert variant."""
+    icon_file = resource_path("images", "icons", "emotiv_lsl_icon_design.ico")
+    try:
+        normal = Image.open(icon_file).convert("RGBA")
+    except Exception:
+        normal = Image.new("RGBA", (64, 64), color=(30, 120, 220, 255))
+
+    # Build a red-tinted copy for the disconnected flash state
+    r, g, b, a = normal.split()
+    alert = Image.merge(
+        "RGBA",
+        (
+            r.point(lambda p: min(255, int(p * 0.35 + 165))),
+            g.point(lambda p: int(p * 0.25)),
+            b.point(lambda p: int(p * 0.25)),
+            a,
+        ),
+    )
+    return normal, alert
+
+
+def set_headset_alert(active: bool):
+    """Enable or disable the flashing disconnected tray indicator."""
+    global _alert_active
+    with _alert_lock:
+        _alert_active = bool(active)
+        should_flash = _alert_active
+
+    icon = _tray_icon
+    if icon is None:
+        return
+
+    if should_flash:
+        icon.title = TRAY_TITLE_DISCONNECTED
+    else:
+        icon.title = TRAY_TITLE_NORMAL
+        if _icon_normal is not None:
+            icon.icon = _icon_normal
+
+
+def _flash_loop():
+    showing_alert = False
+    while not _flash_stop.wait(FLASH_INTERVAL_SEC):
+        with _alert_lock:
+            active = _alert_active
+        icon = _tray_icon
+        if icon is None or _icon_normal is None or _icon_alert is None:
+            continue
+        if not active:
+            if showing_alert:
+                icon.icon = _icon_normal
+                icon.title = TRAY_TITLE_NORMAL
+                showing_alert = False
+            continue
+        showing_alert = not showing_alert
+        icon.icon = _icon_alert if showing_alert else _icon_normal
+        icon.title = TRAY_TITLE_DISCONNECTED
+
+
+def start_flash_thread():
+    global _flash_thread
+    _flash_stop.clear()
+    if _flash_thread is not None and _flash_thread.is_alive():
+        return
+    _flash_thread = threading.Thread(target=_flash_loop, name="tray-flash", daemon=True)
+    _flash_thread.start()
+
+
+def stop_flash_thread():
+    _flash_stop.set()
+    thread = _flash_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=2.0)
+
+
+def on_connection_change(connected: bool):
+    # Flash only after a prior successful connection has been lost
+    set_headset_alert(not connected)
+
 
 def _get_console_hwnd():
     if sys.platform != "win32":
@@ -163,7 +265,11 @@ def run_emotiv_loop():
         enable_electrode_quality_stream: bool = True
         enable_motion_data: bool = True
 
-    emotiv_epoc_x = EmotivEpocX(enable_motion_data=enable_motion_data, enable_electrode_quality_stream=enable_electrode_quality_stream)
+    emotiv_epoc_x = EmotivEpocX(
+        enable_motion_data=enable_motion_data,
+        enable_electrode_quality_stream=enable_electrode_quality_stream,
+        on_connection_change=on_connection_change,
+    )
     crypto_key = emotiv_epoc_x.get_crypto_key()
     print(f'crypto_key: {crypto_key}')
     emotiv_epoc_x.main_loop()
@@ -172,6 +278,8 @@ def on_toggle_clicked(icon, item):
     toggle_console()
 
 def on_exit_clicked(icon, item):
+    set_headset_alert(False)
+    stop_flash_thread()
     icon.stop()
     sys.exit(0)
 
@@ -179,22 +287,23 @@ if __name__ == "__main__":
     _instance_lock = enforce_single_instance()
     install_console_minimize_hook()
 
-    # Create tray icon
-    try:
-        icon_image = Image.open("images/icons/emotiv_lsl_icon_design.ico")
-    except Exception:
-        # Fallback if image is missing
-        icon_image = Image.new('RGB', (64, 64), color='blue')
+    _icon_normal, _icon_alert = load_tray_icons()
 
     menu = pystray.Menu(
         pystray.MenuItem("Toggle Console", on_toggle_clicked, default=True),
         pystray.MenuItem("Exit", on_exit_clicked)
     )
-    tray_icon = pystray.Icon("emotiv_lsl", icon_image, "Emotiv LSL Server", menu)
+    tray_icon = pystray.Icon("emotiv_lsl", _icon_normal, TRAY_TITLE_NORMAL, menu)
+    _tray_icon = tray_icon
+    start_flash_thread()
 
     # Start Emotiv in a background thread so the main thread can run the system tray
     emotiv_thread = threading.Thread(target=run_emotiv_loop, daemon=True)
     emotiv_thread.start()
 
     # Start the tray icon loop (blocks the main thread)
-    tray_icon.run()
+    try:
+        tray_icon.run()
+    finally:
+        set_headset_alert(False)
+        stop_flash_thread()

@@ -2,6 +2,7 @@ from typing import Dict, List, Tuple, Optional, Callable, Union, Any
 from datetime import datetime, timedelta
 # import hid
 import logging
+import time
 from Crypto.Cipher import AES
 import numpy as np
 import pylsl
@@ -24,6 +25,12 @@ class EmotivBase(EasyTimeSyncParsingMixin):
     is_reverse_engineer_mode: bool = field(default=False)
     enable_electrode_quality_stream: bool = field(default=False)
     enable_motion_data: bool = field(default=False)
+    # Called with True/False on connected/disconnected transitions after first EEG success
+    on_connection_change: Optional[Callable[[bool], None]] = field(default=None)
+    # Milliseconds for timed HID reads; keeps the loop responsive for disconnect checks
+    hid_read_timeout_ms: int = field(default=500)
+    # Seconds without valid EEG after first connect before reporting disconnected
+    disconnect_timeout_sec: float = field(default=3.0)
 
     # def __attrs_post_init__(self):
     #     self.cipher = Cipher(self.serial_number)
@@ -172,6 +179,16 @@ class EmotivBase(EasyTimeSyncParsingMixin):
         
 
 
+    def _notify_connection_change(self, connected: bool) -> None:
+        if self.on_connection_change is None:
+            return
+        try:
+            self.on_connection_change(connected)
+        except Exception:
+            logging.getLogger(f'emotiv.{self.device_name.replace(" ", "_").lower()}').exception(
+                "on_connection_change callback failed"
+            )
+
     def main_loop(self):
         import hid
 
@@ -201,60 +218,118 @@ class EmotivBase(EasyTimeSyncParsingMixin):
             logger.debug(f'hid_device: {hid_device}\n\twith path: {device["path"]}\n')
         
         packet_count = 0
-        
-        while True:
-            data = hid_device.read(self.READ_SIZE)
-            packet_count += 1
-            
-            if (self.is_reverse_engineer_mode and (raw_packet_outlet is not None)):
-                ## output the raw data
-                raw_packet_outlet.push_sample(data)
+        ever_connected = False
+        is_connected = False
+        last_eeg_time: Optional[float] = None
 
+        def _mark_eeg_received() -> None:
+            nonlocal ever_connected, is_connected, last_eeg_time
+            last_eeg_time = time.monotonic()
+            if not is_connected:
+                was_ever = ever_connected
+                ever_connected = True
+                is_connected = True
+                logger.info("Headset EEG connection established" if not was_ever else "Headset EEG connection restored")
+                self._notify_connection_change(True)
 
-            if self.validate_data(data):
-                if self.enable_debug_logging:
-                    logger.debug(f"Packet #{packet_count}: Valid data packet, length={len(data)}")
+        def _mark_disconnected(reason: str) -> None:
+            nonlocal is_connected
+            if ever_connected and is_connected:
+                is_connected = False
+                logger.warning(f"Headset EEG connection lost ({reason})")
+                self._notify_connection_change(False)
 
-                decoded, eeg_quality_data = self.decode_data(data)
-                
-                if (eeg_quality_data is not None) and len(eeg_quality_data) == 14:
-                    if self.is_reverse_engineer_mode:
-                        logger.debug(f'got eeg quality data: {eeg_quality_data}')
-                    if eeg_quality_outlet is None:
-                        eeg_quality_outlet = StreamOutlet(self.get_lsl_outlet_electrode_quality_stream_info())
-                        logger.debug(f'set up EEG Sensor Quality outlet!')
-                    eeg_quality_outlet.push_sample(eeg_quality_data)
-                        
-                # else:
-                # decoded = self.decode_data(data)
-                    
-                if decoded is not None:
-                    # Check if this is motion data (based on number of channels)
-                    if len(decoded) == 6:
-                        if self.enable_motion_data:
-                            if self.enable_debug_logging:
-                                logger.debug(f"Packet #{packet_count}: Motion data decoded, {len(decoded)} channels")
-                            if not self.has_motion_data:
-                                self.has_motion_data = True
-                                logger.debug(f'got first motion data!')
-
-                            if motion_outlet is None:
-                                motion_outlet = StreamOutlet(self.get_lsl_outlet_motion_stream_info())
-                                logger.debug(f'set up motion outlet!')
-                            motion_outlet.push_sample(decoded)
-                        elif self.enable_debug_logging:
-                            logger.debug(f"Packet #{packet_count}: Motion data decoded but disabled (enable_motion_data=False)")
-
-                    elif len(decoded) == 14:  # EEG data has 14 channels
-                        if self.enable_debug_logging:
-                            logger.debug(f"Packet #{packet_count}: EEG data decoded, {len(decoded)} channels")
-                        if eeg_outlet is None:
-                            eeg_outlet = StreamOutlet(self.get_lsl_outlet_eeg_stream_info())
-                            logger.debug(f'set up EEG outlet!')                                                        
-                        eeg_outlet.push_sample(decoded)
+        # hidapi exposes read(max_length, timeout_ms=0); fall back to positional for older builds
+        use_timeout_ms_kwarg = True
+        try:
+            while True:
+                try:
+                    if use_timeout_ms_kwarg:
+                        data = hid_device.read(self.READ_SIZE, timeout_ms=self.hid_read_timeout_ms)
                     else:
-                        logger.debug(f"Packet #{packet_count}: Unknown data type with {len(decoded)} channels")
+                        data = hid_device.read(self.READ_SIZE, self.hid_read_timeout_ms)
+                except TypeError:
+                    use_timeout_ms_kwarg = False
+                    data = hid_device.read(self.READ_SIZE, self.hid_read_timeout_ms)
+                except Exception as e:
+                    _mark_disconnected(f"HID read error: {e}")
+                    raise
+
+                if not data:
+                    if (
+                        ever_connected
+                        and last_eeg_time is not None
+                        and (time.monotonic() - last_eeg_time) >= self.disconnect_timeout_sec
+                    ):
+                        _mark_disconnected(f"no EEG for {self.disconnect_timeout_sec:.1f}s")
+                    continue
+
+                packet_count += 1
+                
+                if (self.is_reverse_engineer_mode and (raw_packet_outlet is not None)):
+                    ## output the raw data
+                    raw_packet_outlet.push_sample(data)
+
+                if self.validate_data(data):
+                    if self.enable_debug_logging:
+                        logger.debug(f"Packet #{packet_count}: Valid data packet, length={len(data)}")
+
+                    decoded, eeg_quality_data = self.decode_data(data)
+                    
+                    if (eeg_quality_data is not None) and len(eeg_quality_data) == 14:
+                        if self.is_reverse_engineer_mode:
+                            logger.debug(f'got eeg quality data: {eeg_quality_data}')
+                        if eeg_quality_outlet is None:
+                            eeg_quality_outlet = StreamOutlet(self.get_lsl_outlet_electrode_quality_stream_info())
+                            logger.debug(f'set up EEG Sensor Quality outlet!')
+                        eeg_quality_outlet.push_sample(eeg_quality_data)
+                            
+                    # else:
+                    # decoded = self.decode_data(data)
+                        
+                    if decoded is not None:
+                        # Check if this is motion data (based on number of channels)
+                        if len(decoded) == 6:
+                            if self.enable_motion_data:
+                                if self.enable_debug_logging:
+                                    logger.debug(f"Packet #{packet_count}: Motion data decoded, {len(decoded)} channels")
+                                if not self.has_motion_data:
+                                    self.has_motion_data = True
+                                    logger.debug(f'got first motion data!')
+
+                                if motion_outlet is None:
+                                    motion_outlet = StreamOutlet(self.get_lsl_outlet_motion_stream_info())
+                                    logger.debug(f'set up motion outlet!')
+                                motion_outlet.push_sample(decoded)
+                            elif self.enable_debug_logging:
+                                logger.debug(f"Packet #{packet_count}: Motion data decoded but disabled (enable_motion_data=False)")
+
+                        elif len(decoded) == 14:  # EEG data has 14 channels
+                            if self.enable_debug_logging:
+                                logger.debug(f"Packet #{packet_count}: EEG data decoded, {len(decoded)} channels")
+                            if eeg_outlet is None:
+                                eeg_outlet = StreamOutlet(self.get_lsl_outlet_eeg_stream_info())
+                                logger.debug(f'set up EEG outlet!')                                                        
+                            eeg_outlet.push_sample(decoded)
+                            _mark_eeg_received()
+                        else:
+                            logger.debug(f"Packet #{packet_count}: Unknown data type with {len(decoded)} channels")
+                    else:
+                        logger.debug(f"Packet #{packet_count}: self.decode_data(data) failed -- data packet (skipped)")
                 else:
-                    logger.debug(f"Packet #{packet_count}: self.decode_data(data) failed -- data packet (skipped)")
-            else:
-                logger.debug(f"Packet #{packet_count}: Invalid data packet, length={len(data)}")
+                    logger.debug(f"Packet #{packet_count}: Invalid data packet, length={len(data)}")
+
+                if (
+                    ever_connected
+                    and last_eeg_time is not None
+                    and (time.monotonic() - last_eeg_time) >= self.disconnect_timeout_sec
+                ):
+                    _mark_disconnected(f"no EEG for {self.disconnect_timeout_sec:.1f}s")
+        except Exception as e:
+            _mark_disconnected(f"loop error: {e}")
+            raise
+        finally:
+            try:
+                hid_device.close()
+            except Exception:
+                pass
