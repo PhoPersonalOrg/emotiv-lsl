@@ -19,18 +19,18 @@ dependencies = [
     "setuptools>=75.3.2,<81",
     "wheel>=0.45.1",
     "pyqt5>=5.15.7,<6; platform_machine != 'aarch64' or sys_platform != 'linux'",
-    "pyqt5-qt5==5.15.2; platform_machine != 'aarch64' or sys_platform != 'linux'",
+    "pyqt5-qt5==5.15.2; (platform_machine != 'aarch64' or sys_platform != 'linux') and platform_machine != 'arm64'",
     "pyshark>=0.6",
     "scipy>=1.10.1",
     "attrs>=22.2.0",
     "pyinstaller>=6.14.2",
     "pyqtgraph>=0.13.3",
     "phopylslhelper",
-    "hid==1.0.4",
     "influxdb-client>=1.49.0",
     "numpy>=2.0.2",
     "pystray>=0.19.5",
     "lab-recorder-python",
+    "hidapi>=0.15.0",
 ]
 
 [tool.uv.sources]
@@ -40,7 +40,10 @@ bsl = { path = "../bsl", editable = true }
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["win-64", "linux-aarch64", "osx-64", "linux-64"]
+platforms = ["win-64", "linux-aarch64", "osx-arm64", "osx-64", "linux-64"]
+
+[tool.pixi.dependencies]
+python = "3.12.*"
 
 [tool.pixi.target.win-64.dependencies]
 liblsl = "*"
