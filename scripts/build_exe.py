@@ -21,7 +21,7 @@ def main() -> None:
     PyInstaller.__main__.run([
         "main.py",
         "--onefile",
-        "--windowed",
+        "--console",
         "--name=emotiv_lsl",
         "--icon=images\\icons\\emotiv_lsl_icon_design.ico",
         "--add-data=*.py;.",
