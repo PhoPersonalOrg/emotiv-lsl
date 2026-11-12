@@ -21,7 +21,8 @@
 - Crypto: Version2 EpocXMode key schedule; XOR `0x55` → AES-128-ECB. V4/`findKey` unsupported.
 - Transport remains USB HID only (no BLE GATT stack here). BLE checklist lives in the reverse-engineer protocol memory (`epocx-ble-protocol.md`).
 - Motion: Android 20 B BE Q/ACC/MAG decoder exists; LSL motion defaults off until a real 20 B HID report is confirmed.
-- Offline checks: `python -m tests.test_epoc_x_decode`
+- Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`
+- Replay: `python scripts/xdf_to_epocx_wire.py in.xdf -o out.epocxwire` then `python main.py --replay out.epocxwire` (or pass `.xdf` directly). Same `.epocxwire` works with `emotiv-lsl-cpp --replay`.
 
 ## Code Style
 - **Imports**: Standard library first, then third-party (hid, pylsl, Crypto), then local imports

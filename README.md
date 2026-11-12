@@ -8,7 +8,23 @@ LSL (Lab Streaming Layer) server for the Emotiv EPOC X headset, based on the ori
 - EEG path is aligned to EmotivPRO Android **Mode 7** (EpocPlus LE16 + `getRawEegId` remap + ADC ÷7.8). Transport remains **USB HID**.
 - Crypto uses Version2 **EpocXMode** (XOR `0x55` → AES-128-ECB). Firmware V4 / `findKey` is unsupported.
 - Motion LSL defaults off; a 20-byte Android Q/ACC/MAG decoder is present for when HID/BLE exposes that report.
-- Offline checks: `pixi run python -m tests.test_epoc_x_decode`
+- Offline checks: `pixi run python -m tests.test_epoc_x_decode` and `python -m tests.test_epocx_wire`
+
+### XDF → wire replay (no headset)
+
+Re-encode a LabRecorder `.xdf` into timed Mode-7 HID-like packets and run the full decrypt/decode/LSL path:
+
+```bash
+# Convert once (needs pyxdf)
+python scripts/xdf_to_epocx_wire.py recording.xdf -o recording.epocxwire
+
+# Replay through this client (also accepts .xdf directly)
+python main.py --replay recording.epocxwire
+python main.py --replay recording.epocxwire --replay-speed 0   # as fast as possible
+
+# Same dump works with emotiv-lsl-cpp:
+#   ./emotiv_lsl --replay recording.epocxwire --replay-speed 0
+```
 
 ---
 

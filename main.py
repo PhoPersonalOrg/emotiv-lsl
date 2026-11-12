@@ -30,7 +30,11 @@ if sys.platform == "darwin" and getattr(sys, 'frozen', False):
             os.environ['DYLD_FALLBACK_LIBRARY_PATH'] = ':'.join(paths)
             break
 
+import argparse
+from pathlib import Path
+
 from emotiv_lsl.emotiv_epoc_x import EmotivEpocX
+from emotiv_lsl.epocx_wire import WireReplaySource
 
 import socket
 
@@ -148,7 +152,7 @@ def install_console_minimize_hook():
     else:
         _old_console_wndproc = user32.SetWindowLongW(hwnd, GWLP_WNDPROC, _console_wndproc)
 
-def run_emotiv_loop():
+def run_emotiv_loop(replay_path: Path = None, replay_speed: float = 1.0):
     # Configure logging for debugging data packets
     logging.basicConfig(
         level=logging.DEBUG,
@@ -164,7 +168,24 @@ def run_emotiv_loop():
         print(f'platform is_windows, enabling quality stream (motion still gated)...')
         enable_electrode_quality_stream: bool = True
 
-    emotiv_epoc_x = EmotivEpocX(enable_motion_data=enable_motion_data, enable_electrode_quality_stream=enable_electrode_quality_stream)
+    replay_source = None
+    serial_kwargs = {}
+    if replay_path is not None:
+        replay_source = WireReplaySource.from_path(replay_path, speed=replay_speed)
+        serial_kwargs = {
+            "serial_number": replay_source.header.serial,
+            "serial_source": replay_source.header.serial_source,
+        }
+
+    emotiv_epoc_x = EmotivEpocX(
+        enable_motion_data=enable_motion_data,
+        enable_electrode_quality_stream=enable_electrode_quality_stream,
+        replay_source=replay_source,
+        replay_speed=replay_speed,
+        **serial_kwargs,
+    )
+    if replay_source is not None:
+        replay_source.apply_serial_to(emotiv_epoc_x)
     crypto_key = emotiv_epoc_x.get_crypto_key()
     print(f'crypto_key: {crypto_key}')
     emotiv_epoc_x.main_loop()
@@ -176,7 +197,31 @@ def on_exit_clicked(icon, item):
     icon.stop()
     sys.exit(0)
 
+def _parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Emotiv Epoc X LSL server")
+    p.add_argument(
+        "--replay",
+        type=Path,
+        default=None,
+        help="Replay .epocxwire (or .xdf) instead of opening USB HID",
+    )
+    p.add_argument(
+        "--replay-speed",
+        type=float,
+        default=1.0,
+        help="Replay pace factor (1.0=realtime, 0=as fast as possible)",
+    )
+    return p.parse_args(argv)
+
+
 if __name__ == "__main__":
+    args = _parse_args()
+
+    # Replay mode: foreground decode/LSL loop (no tray / single-instance lock).
+    if args.replay is not None:
+        run_emotiv_loop(replay_path=args.replay, replay_speed=args.replay_speed)
+        sys.exit(0)
+
     _instance_lock = enforce_single_instance()
     install_console_minimize_hook()
 

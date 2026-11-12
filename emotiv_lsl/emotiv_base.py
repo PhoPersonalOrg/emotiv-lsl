@@ -24,6 +24,9 @@ class EmotivBase(EasyTimeSyncParsingMixin):
     is_reverse_engineer_mode: bool = field(default=False)
     enable_electrode_quality_stream: bool = field(default=False)
     enable_motion_data: bool = field(default=False)
+    # Optional WireReplaySource; when set, main_loop skips HID and paces packets.
+    replay_source: Any = field(default=None)
+    replay_speed: float = field(default=1.0)
 
     # def __attrs_post_init__(self):
     #     self.cipher = Cipher(self.serial_number)
@@ -181,8 +184,6 @@ class EmotivBase(EasyTimeSyncParsingMixin):
 
 
     def main_loop(self):
-        import hid
-
         # Create EEG outlet
         eeg_outlet = None 
 
@@ -199,19 +200,33 @@ class EmotivBase(EasyTimeSyncParsingMixin):
             print(f'Setup raw_packet_outlet (for reverse-engineering)')
             
         eeg_quality_outlet = None
-        
-        ## Get the device info
-        device = self.get_hid_device()
-        hid_device = hid.Device(path=device['path'])
         logger = logging.getLogger(f'emotiv.{self.device_name.replace(" ", "_").lower()}')
-        
-        if self.is_reverse_engineer_mode:
-            logger.debug(f'hid_device: {hid_device}\n\twith path: {device["path"]}\n')
+
+        hid_device = None
+        if self.replay_source is not None:
+            print(
+                f"Replay mode: serial={getattr(self.replay_source.header, 'serial', '?')} "
+                f"speed={self.replay_speed}"
+            )
+        else:
+            import hid
+
+            ## Get the device info
+            device = self.get_hid_device()
+            hid_device = hid.Device(path=device['path'])
+            if self.is_reverse_engineer_mode:
+                logger.debug(f'hid_device: {hid_device}\n\twith path: {device["path"]}\n')
         
         packet_count = 0
         
         while True:
-            data = hid_device.read(self.READ_SIZE)
+            if self.replay_source is not None:
+                data = self.replay_source.read(self.READ_SIZE)
+                if not data:
+                    print(f"Replay finished after {packet_count} packet(s)")
+                    break
+            else:
+                data = hid_device.read(self.READ_SIZE)
             packet_count += 1
             
             if (self.is_reverse_engineer_mode and (raw_packet_outlet is not None)):
