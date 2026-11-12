@@ -211,7 +211,13 @@ class EmotivBase(EasyTimeSyncParsingMixin):
         
         ## Get the device info
         device = self.get_hid_device()
-        hid_device = hid.Device(path=device['path'])
+        # ctypes pyhidapi: hid.Device(path=...) opens in the constructor.
+        # Cython hidapi: hid.device() then open_path(path).
+        if hasattr(hid, "Device"):
+            hid_device = hid.Device(path=device['path'])
+        else:
+            hid_device = hid.device()
+            hid_device.open_path(device['path'])
         logger = logging.getLogger(f'emotiv.{self.device_name.replace(" ", "_").lower()}')
         
         if self.is_reverse_engineer_mode:

@@ -7,11 +7,20 @@ is_windows: bool = False
 
 # Add the directory containing the HIDAPI DLL on Windows only
 if sys.platform == "win32":
-    arch_dir = "x64" if platform.architecture()[0] == "64bit" else "x86"
-    project_root = os.path.dirname(os.path.abspath(__file__))
-    dll_dir = os.path.join(project_root, "hidapi-win", arch_dir)
-    if os.path.isdir(dll_dir):
-        os.add_dll_directory(dll_dir)
+    if getattr(sys, "frozen", False):
+        # Onefile/onedir: hidapi.dll is bundled at package root (_MEIPASS or exe dir).
+        _meipass = getattr(sys, "_MEIPASS", None)
+        if _meipass and os.path.isdir(_meipass):
+            os.add_dll_directory(_meipass)
+        _exe_dir = os.path.dirname(sys.executable)
+        if os.path.isdir(_exe_dir):
+            os.add_dll_directory(_exe_dir)
+    else:
+        arch_dir = "x64" if platform.architecture()[0] == "64bit" else "x86"
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        dll_dir = os.path.join(project_root, "hidapi-win", arch_dir)
+        if os.path.isdir(dll_dir):
+            os.add_dll_directory(dll_dir)
     is_windows = True
 
 # Hint the loader about bundled hidapi on macOS when frozen
