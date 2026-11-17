@@ -7,9 +7,6 @@
 			"path": "../PhoLogToLabStreamingLayer"
 		},
 		{
-			"path": "../CyKit"
-		},
-		{
 			"path": "../uv-launcher"
 		},
 		{
@@ -81,6 +78,8 @@
 			}
 		},
 		"terminal.integrated.defaultProfile.windows": "lsl-env-powershell",
+		"python.defaultInterpreterPath": "${workspaceFolder:emotiv-lsl}/.venv/Scripts/python.exe",
+		"python.terminal.activateEnvironment": true,
 		"python.languageServer": "None",
 		"editor.fontSize": 12,
 		"files.exclude": {
@@ -88,6 +87,7 @@
 		},
 		"search.exclude": {
 			"**/__pycache__": true
-		}
+		},
+		"specstory.cloudSync.enabled": "never"
 	}
 }
