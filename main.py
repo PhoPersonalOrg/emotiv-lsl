@@ -123,11 +123,13 @@ def load_tray_icons():
 
 
 def set_headset_alert(active: bool):
-    """Enable or disable the flashing disconnected tray indicator."""
+    """Enable or disable the flashing disconnected tray/taskbar indicator."""
     global _alert_active
     with _alert_lock:
         _alert_active = bool(active)
         should_flash = _alert_active
+
+    _flash_taskbar(should_flash)
 
     icon = _tray_icon
     if icon is None:
@@ -189,6 +191,44 @@ def _get_console_hwnd():
 
     ctypes.windll.kernel32.GetConsoleWindow.restype = wintypes.HWND
     return ctypes.windll.kernel32.GetConsoleWindow()
+
+
+def _flash_taskbar(active: bool):
+    """Flash or stop flashing the console's Windows taskbar button."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    hwnd = _get_console_hwnd()
+    if not hwnd:
+        return
+
+    FLASHW_STOP = 0
+    FLASHW_ALL = 3
+    FLASHW_TIMER = 4
+
+    class FLASHWINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.UINT),
+            ("hwnd", wintypes.HWND),
+            ("dwFlags", wintypes.DWORD),
+            ("uCount", wintypes.UINT),
+            ("dwTimeout", wintypes.DWORD),
+        ]
+
+    info = FLASHWINFO()
+    info.cbSize = ctypes.sizeof(FLASHWINFO)
+    info.hwnd = hwnd
+    info.dwTimeout = 0
+    if active:
+        info.dwFlags = FLASHW_ALL | FLASHW_TIMER
+        info.uCount = 0  # flash until FLASHW_STOP
+    else:
+        info.dwFlags = FLASHW_STOP
+        info.uCount = 0
+
+    ctypes.windll.user32.FlashWindowEx(ctypes.byref(info))
 
 
 def hide_console():
