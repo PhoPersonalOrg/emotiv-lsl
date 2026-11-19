@@ -303,7 +303,11 @@ def install_console_minimize_hook():
     else:
         _old_console_wndproc = user32.SetWindowLongW(hwnd, GWLP_WNDPROC, _console_wndproc)
 
-def run_emotiv_loop(replay_path: Path = None, replay_speed: float = 1.0):
+def run_emotiv_loop(
+    replay_path: Path = None,
+    replay_speed: float = 1.0,
+    record_path: Path = None,
+):
     # Configure logging for debugging data packets
     logging.basicConfig(
         level=logging.DEBUG,
@@ -334,6 +338,7 @@ def run_emotiv_loop(replay_path: Path = None, replay_speed: float = 1.0):
         on_connection_change=on_connection_change,
         replay_source=replay_source,
         replay_speed=replay_speed,
+        record_path=record_path,
         **serial_kwargs,
     )
     if replay_source is not None:
@@ -366,15 +371,26 @@ def _parse_args(argv=None):
         default=1.0,
         help="Replay pace factor (1.0=realtime, 0=as fast as possible)",
     )
+    p.add_argument(
+        "--record",
+        type=Path,
+        default=None,
+        help="Record exact HID session (or replay stream) to .epocxwire v2",
+    )
     return p.parse_args(argv)
 
 
 if __name__ == "__main__":
     args = _parse_args()
 
-    # Replay mode: foreground decode/LSL loop (no tray / single-instance lock).
-    if args.replay is not None:
-        run_emotiv_loop(replay_path=args.replay, replay_speed=args.replay_speed)
+    # Replay and/or record: foreground decode/LSL loop (no tray / single-instance lock).
+    if args.replay is not None or args.record is not None:
+        # Live --record alone still needs tray-free foreground so Ctrl+C closes the file.
+        run_emotiv_loop(
+            replay_path=args.replay,
+            replay_speed=args.replay_speed,
+            record_path=args.record,
+        )
         sys.exit(0)
 
     _instance_lock = enforce_single_instance()

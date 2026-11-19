@@ -10,20 +10,34 @@ LSL (Lab Streaming Layer) server for the Emotiv EPOC X headset, based on the ori
 - Motion LSL defaults off; a 20-byte Android Q/ACC/MAG decoder is present for when HID/BLE exposes that report.
 - Offline checks: `pixi run python -m tests.test_epoc_x_decode` and `python -m tests.test_epocx_wire`
 
-### XDF → wire replay (no headset)
+### Exact HID session capture + replay (headset emulator)
 
-Re-encode a LabRecorder `.xdf` into timed Mode-7 HID-like packets and run the full decrypt/decode/LSL path:
+Record **every** HID read outcome (REPORT payloads of any size, EMPTY timeouts, ERROR, OPEN/CLOSE) plus device metadata into `.epocxwire` v2, then replay through decrypt → decode → LSL without the dongle:
 
 ```bash
-# Convert once (needs pyxdf)
+# Live capture (exact bytes + gaps)
+python main.py --record session.epocxwire
+
+# Replay the capture (EMPTY gaps exercise disconnect-timeout logic)
+python main.py --replay session.epocxwire
+python main.py --replay session.epocxwire --replay-speed 0   # as fast as possible
+```
+
+XDF → wire is a **synthetic** path (re-encrypts decoded µV); prefer `--record` for regression gold files.
+
+```bash
 python scripts/xdf_to_epocx_wire.py recording.xdf -o recording.epocxwire
-
-# Replay through this client (also accepts .xdf directly)
 python main.py --replay recording.epocxwire
-python main.py --replay recording.epocxwire --replay-speed 0   # as fast as possible
-
 # Same dump works with emotiv-lsl-cpp:
 #   ./emotiv_lsl --replay recording.epocxwire --replay-speed 0
+```
+
+#### WinUHid feeder (later)
+
+In-process `--replay` covers crypto/decode/save. A future OS-level feeder will present `VID_1234`/`PID_ED02` via [WinUHid](https://github.com/lurebat/WinUHid) so any hidapi app sees a virtual dongle. The capture file is the source of truth; optional header `report_descriptor=` (hex) will recreate collections. Caveat: WinUHid may not expose the USB serial string — AES may still need header `serial=` inject, or a fuller USB emulator (UDECX/Vdevice). Dry-run pacing without a driver:
+
+```bash
+python scripts/feed_winuhid.py session.epocxwire --dry-run --speed 0
 ```
 
 ---
