@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Dry-run (and future) WinUHid feeder for EPOCXWIRE/2 captures.
+"""WinUHid feeder for EPOCXWIRE/2 captures.
 
-Without the WinUHid driver this script only paces REPORT events and prints them.
-A later implementation will call WinUHidCreateDevice + WinUHidSubmitInputReport
-using header vid/pid and optional report_descriptor hex.
+Without the WinUHid driver this script paces REPORT events and prints them
+(``--dry-run``, default). With the driver installed, ``--submit`` creates a
+virtual HID device (VID/PID + report descriptor from the wire header) and
+calls WinUHidSubmitInputReport for each REPORT payload.
 
 Usage:
   python scripts/feed_winuhid.py session.epocxwire --dry-run
   python scripts/feed_winuhid.py session.epocxwire --dry-run --speed 0
+  python scripts/feed_winuhid.py session.epocxwire --submit
 """
 from __future__ import annotations
 
@@ -51,7 +53,7 @@ def dry_run(path: Path, *, speed: float = 1.0) -> int:
     if hdr.report_descriptor:
         print(f"  report_descriptor: {len(hdr.report_descriptor)//2} bytes (hex present)")
     else:
-        print("  report_descriptor: (none — capture/store for WinUHid later)")
+        print("  report_descriptor: (none — using built-in Emotiv EEG default on --submit)")
 
     t0 = time.perf_counter()
     for ev in wire.events:
@@ -73,28 +75,42 @@ def dry_run(path: Path, *, speed: float = 1.0) -> int:
     return 0
 
 
+def submit_run(path: Path, *, speed: float = 1.0) -> int:
+    wire = read_wire_file(path)
+    hdr = wire.header
+    print(
+        f"submit feed: serial={hdr.serial} vid={hdr.vid} pid={hdr.pid} "
+        f"events={len(wire.events)} speed={speed}"
+    )
+    feeder = WinUHidFeeder(path, speed=speed)
+    try:
+        feeder.open()
+        n = feeder.feed()
+    finally:
+        feeder.close()
+    print(f"done ({n} input reports submitted)")
+    return 0
+
+
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(description="WinUHid feeder for .epocxwire (dry-run for now)")
+    p = argparse.ArgumentParser(description="WinUHid feeder for .epocxwire")
     p.add_argument("wire", type=Path, help="EPOCXWIRE/1 or /2 capture file")
-    p.add_argument(
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument(
         "--dry-run",
         action="store_true",
-        default=True,
         help="Pace and print events without WinUHid (default)",
     )
-    p.add_argument(
+    mode.add_argument(
         "--submit",
         action="store_true",
-        help="Attempt real WinUHid submit (not implemented yet)",
+        help="Create a virtual HID device and submit REPORT payloads via WinUHid",
     )
     p.add_argument("--speed", type=float, default=1.0, help="Pace factor (0=asap)")
     args = p.parse_args(argv)
 
     if args.submit:
-        feeder = WinUHidFeeder(args.wire, speed=args.speed)
-        feeder.open()  # raises NotImplementedError
-        return 1
-
+        return submit_run(args.wire, speed=args.speed)
     return dry_run(args.wire, speed=args.speed)
 
 

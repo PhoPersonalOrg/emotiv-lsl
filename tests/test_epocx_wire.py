@@ -236,9 +236,12 @@ class TestWireV2Session(unittest.TestCase):
             self.assertEqual(reports[0].payload, self.payload)
             self.assertEqual(reports[1].payload, b"\x01\x02")
 
-    def test_replay_feeder_and_winuhid_stub(self):
+    def test_replay_feeder_and_winuhid_feed(self):
+        from emotiv_lsl.epocx_wire import resolve_report_descriptor_hex
+        from emotiv_lsl.winuhid import DEFAULT_EPOCX_REPORT_DESCRIPTOR
+
         wire = WireFile(
-            header=WireHeader(serial=self.serial),
+            header=WireHeader(serial=self.serial, vid=0x1234, pid=0xED02),
             packets=[WirePacket(rel_ns=0, payload=self.payload)],
         )
         with tempfile.TemporaryDirectory() as td:
@@ -251,9 +254,55 @@ class TestWireV2Session(unittest.TestCase):
             self.assertTrue(feeder.eof)
             feeder.close()
 
-            stub = WinUHidFeeder(path)
+            self.assertEqual(
+                resolve_report_descriptor_hex(WireHeader(serial=self.serial)),
+                DEFAULT_EPOCX_REPORT_DESCRIPTOR,
+            )
+            custom = "aabbcc"
+            self.assertEqual(
+                resolve_report_descriptor_hex(
+                    WireHeader(serial=self.serial, report_descriptor=custom)
+                ),
+                bytes.fromhex(custom),
+            )
+
+            created = []
+            started = []
+            submitted = []
+            destroyed = []
+
+            class MockBackend:
+                def create(self, *, vendor_id, product_id, report_descriptor, version_number=0):
+                    created.append(
+                        (vendor_id, product_id, bytes(report_descriptor), version_number)
+                    )
+                    return object()
+
+                def start(self, device):
+                    started.append(device)
+
+                def submit(self, device, report):
+                    submitted.append(bytes(report))
+
+                def destroy(self, device):
+                    destroyed.append(device)
+
+            uh = WinUHidFeeder(path, speed=0.0, backend=MockBackend())
+            uh.open()
+            self.assertFalse(uh.eof)
+            n = uh.feed()
+            self.assertEqual(n, 1)
+            self.assertTrue(uh.eof)
+            uh.close()
+            self.assertEqual(len(created), 1)
+            self.assertEqual(created[0][0], 0x1234)
+            self.assertEqual(created[0][1], 0xED02)
+            self.assertEqual(created[0][2], DEFAULT_EPOCX_REPORT_DESCRIPTOR)
+            self.assertEqual(len(started), 1)
+            self.assertEqual(submitted, [self.payload])
+            self.assertEqual(len(destroyed), 1)
             with self.assertRaises(NotImplementedError):
-                stub.open()
+                uh.read(32)
 
 
 if __name__ == "__main__":

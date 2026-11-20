@@ -262,12 +262,16 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                 logger.debug(f'hid_device: {hid_device}\n\twith path: {device["path"]}\n')
 
             if recorder is None and _pending_record_path is not None:
+                from emotiv_lsl.epocx_wire import try_get_report_descriptor_hex
+
+                desc_hex = try_get_report_descriptor_hex(hid_device)
                 hdr = header_from_hid_device(
                     device,
                     serial_source=getattr(self, "serial_source", "hid") or "hid",
                     adc_div=float(getattr(self, "adc_div", 7.8)),
                     read_size=self.READ_SIZE,
                     read_timeout_ms=self.hid_read_timeout_ms,
+                    report_descriptor=desc_hex,
                 )
                 if self.serial_number:
                     hdr.serial = str(self.serial_number)
@@ -277,6 +281,9 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                 recorder = WireSessionRecorder(_pending_record_path, hdr)
                 recorder.open()
                 print(f"Recording HID session to {_pending_record_path}")
+                if desc_hex:
+                    print(f"  report_descriptor: {len(desc_hex)//2} bytes captured")
+
             elif recorder is not None and getattr(recorder, "_f", None) is None:
                 recorder.open()
 
@@ -412,6 +419,15 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                     logger.debug(f"Packet #{packet_count}: Invalid data packet, length={len(data)}")
 
                 _check_disconnect_timeout()
+        except KeyboardInterrupt:
+            _mark_disconnected("interrupted")
+            if recorder is not None:
+                print(
+                    f"\nStopped recording after {packet_count} packet(s); "
+                    f"saved {recorder.path}"
+                )
+            else:
+                print(f"\nStopped after {packet_count} packet(s)")
         except Exception as e:
             if recorder is not None:
                 try:

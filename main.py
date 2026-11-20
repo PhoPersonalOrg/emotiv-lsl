@@ -386,11 +386,17 @@ if __name__ == "__main__":
     # Replay and/or record: foreground decode/LSL loop (no tray / single-instance lock).
     if args.replay is not None or args.record is not None:
         # Live --record alone still needs tray-free foreground so Ctrl+C closes the file.
-        run_emotiv_loop(
-            replay_path=args.replay,
-            replay_speed=args.replay_speed,
-            record_path=args.record,
-        )
+        try:
+            run_emotiv_loop(
+                replay_path=args.replay,
+                replay_speed=args.replay_speed,
+                record_path=args.record,
+            )
+        except KeyboardInterrupt:
+            # main_loop already closes the recorder in finally; this avoids a traceback
+            # if interrupt lands outside the loop.
+            print("\nInterrupted.")
+            sys.exit(130)
         sys.exit(0)
 
     _instance_lock = enforce_single_instance()

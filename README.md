@@ -32,12 +32,15 @@ python main.py --replay recording.epocxwire
 #   ./emotiv_lsl --replay recording.epocxwire --replay-speed 0
 ```
 
-#### WinUHid feeder (later)
+#### WinUHid feeder
 
-In-process `--replay` covers crypto/decode/save. A future OS-level feeder will present `VID_1234`/`PID_ED02` via [WinUHid](https://github.com/lurebat/WinUHid) so any hidapi app sees a virtual dongle. The capture file is the source of truth; optional header `report_descriptor=` (hex) will recreate collections. Caveat: WinUHid may not expose the USB serial string — AES may still need header `serial=` inject, or a fuller USB emulator (UDECX/Vdevice). Dry-run pacing without a driver:
+In-process `--replay` covers crypto/decode/save. The OS-level feeder presents `VID_1234`/`PID_ED02` via [WinUHid](https://github.com/lurebat/WinUHid) so any hidapi app sees a virtual dongle. Install the WinUHid driver/SDK and ensure `WinUHid.dll` is on `PATH` (or set `WINUHID_DLL` to its absolute path). The capture file is the source of truth; optional header `report_descriptor=` (hex) recreates collections (live `--record` stores it when hidapi exposes the descriptor; otherwise a built-in Emotiv EEG descriptor is used). Caveat: WinUHid may not expose the USB serial string — AES may still need header `serial=` inject, or a fuller USB emulator (UDECX/Vdevice).
 
 ```bash
+# Pace/print without a driver:
 python scripts/feed_winuhid.py session.epocxwire --dry-run --speed 0
+# Submit REPORT payloads to a virtual HID device:
+python scripts/feed_winuhid.py session.epocxwire --submit
 ```
 
 ---

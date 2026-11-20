@@ -20,6 +20,9 @@
 		},
 		{
 			"path": "../continuous_video_recorder"
+		},
+		{
+			"path": "../emotiv-lsl-cpp"
 		}
 	],
 	"settings": {

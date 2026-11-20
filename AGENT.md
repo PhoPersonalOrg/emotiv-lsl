@@ -23,8 +23,9 @@
 - Motion: Android 20 B BE Q/ACC/MAG decoder exists; LSL motion defaults off until a real 20 B HID report is confirmed.
 - Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`
 - Exact HID capture: `python main.py --record session.epocxwire` then `python main.py --replay session.epocxwire`. Format is EPOCXWIRE/2 (REPORT/EMPTY/ERROR/OPEN/CLOSE); v1 still readable. XDF→wire is synthetic; prefer live `--record` for gold fixtures.
-- Replay (synthetic): `python scripts/xdf_to_epocx_wire.py in.xdf -o out.epocxwire` then `python main.py --replay out.epocxwire` (or pass `.xdf` directly). Same `.epocxwire` works with `emotiv-lsl-cpp --replay` (v1; v2 C++ support later).
-- WinUHid OS feeder (later): `WireFeeder` / `WinUHidFeeder` stub + `python scripts/feed_winuhid.py session.epocxwire --dry-run`.
+- Replay (synthetic): `python scripts/xdf_to_epocx_wire.py in.xdf -o out.epocxwire` then `python main.py --replay out.epocxwire` (or pass `.xdf` directly). Same `.epocxwire` works with `emotiv-lsl-cpp --replay` (v1; v2 C++ support later — compare script auto-exports v1).
+- Python vs C++ LSL parity: `python scripts/compare_py_cpp_replay.py session.epocxwire` (sequential replay + sample compare; `--cpp-exe` / `EMOTIV_LSL_CPP` if needed).
+- WinUHid OS feeder: `WinUHidFeeder` + ctypes `emotiv_lsl/winuhid.py`. Dry-run: `python scripts/feed_winuhid.py session.epocxwire --dry-run`. Real submit (driver required): `python scripts/feed_winuhid.py session.epocxwire --submit` (`WINUHID_DLL` if DLL not on PATH).
 
 ## Code Style
 - **Imports**: Standard library first, then third-party (hid, pylsl, Crypto), then local imports

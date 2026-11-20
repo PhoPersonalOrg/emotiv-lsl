@@ -91,7 +91,7 @@ class WireHeader:
     captured_at_utc: Optional[str] = None
     read_size: Optional[int] = None
     read_timeout_ms: Optional[int] = None
-    report_descriptor: Optional[str] = None  # hex, for future WinUHid feeder
+    report_descriptor: Optional[str] = None  # hex, for WinUHidFeeder
     format_version: int = 2
 
 
@@ -225,6 +225,45 @@ def encode_motion_wire(
     return bytes(buf)
 
 
+def try_get_report_descriptor_hex(hid_device: Any, *, buf_size: int = 4096) -> Optional[str]:
+    """Best-effort HID report descriptor as lowercase hex, or None if unavailable."""
+    if hid_device is None:
+        return None
+
+    def _as_bytes(raw: Any) -> Optional[bytes]:
+        if isinstance(raw, (bytes, bytearray)):
+            return bytes(raw)
+        if isinstance(raw, list) and raw and isinstance(raw[0], int):
+            return bytes(raw)
+        return None
+
+    try:
+        getter = getattr(hid_device, "get_report_descriptor", None)
+        if callable(getter):
+            data = _as_bytes(getter(buf_size))
+            if data:
+                return data.hex()
+    except Exception:
+        pass
+
+    try:
+        import hid as hid_mod
+
+        fn = getattr(hid_mod, "hid_get_report_descriptor", None)
+        if callable(fn):
+            buf = bytearray(buf_size)
+            n = fn(hid_device, buf, buf_size)
+            if isinstance(n, int) and n > 0:
+                return bytes(buf[:n]).hex()
+            data = _as_bytes(n)
+            if data:
+                return data.hex()
+    except Exception:
+        pass
+
+    return None
+
+
 def header_from_hid_device(
     device: Dict[str, Any],
     *,
@@ -233,6 +272,7 @@ def header_from_hid_device(
     eeg_hz: float = 128.0,
     read_size: Optional[int] = None,
     read_timeout_ms: Optional[int] = None,
+    report_descriptor: Optional[str] = None,
 ) -> WireHeader:
     """Build a WireHeader from a hidapi enumerate() dict."""
     serial = device.get("serial_number") or DEFAULT_SERIAL
@@ -260,6 +300,7 @@ def header_from_hid_device(
         captured_at_utc=datetime.now(timezone.utc).isoformat(),
         read_size=read_size,
         read_timeout_ms=read_timeout_ms,
+        report_descriptor=report_descriptor,
         format_version=2,
     )
 
@@ -326,6 +367,52 @@ def write_wire_file(path: Union[str, Path], wire: WireFile) -> None:
         for ev in events:
             _write_event(f, ev)
         ## END for ev in events....
+
+
+def write_wire_file_v1(
+    path: Union[str, Path],
+    wire: WireFile,
+    *,
+    rebase_time: bool = False,
+) -> int:
+    """Write REPORT-only EPOCXWIRE/1 for emotiv-lsl-cpp (no v2 reader yet).
+
+    EMPTY/OPEN/CLOSE/ERROR are dropped; REPORT payloads keep their rel_ns
+    unless ``rebase_time`` is True (then the first REPORT is at 0).
+    Returns the number of REPORT packets written.
+    """
+    path = Path(path)
+    packets = list(wire.packets)
+    if not packets and wire.events:
+        packets = [
+            WirePacket(rel_ns=e.rel_ns, payload=e.payload or b"")
+            for e in wire.events
+            if e.kind == EVENT_REPORT
+        ]
+
+    if rebase_time and packets:
+        t0 = packets[0].rel_ns
+        packets = [
+            WirePacket(rel_ns=max(0, p.rel_ns - t0), payload=p.payload)
+            for p in packets
+        ]
+
+    header = wire.header
+    with path.open("wb") as f:
+        # C++ only parses serial / serial_source / adc_div / eeg_hz; extra keys are ignored.
+        f.write(f"{MAGIC_V1}\n".encode("utf-8"))
+        f.write(f"serial={header.serial}\n".encode("utf-8"))
+        f.write(f"serial_source={header.serial_source}\n".encode("utf-8"))
+        f.write(f"adc_div={header.adc_div}\n".encode("utf-8"))
+        f.write(f"eeg_hz={header.eeg_hz}\n".encode("utf-8"))
+        f.write(b"\n")
+        for p in packets:
+            payload = p.payload or b""
+            f.write(struct.pack("<QH", int(p.rel_ns), len(payload)))
+            f.write(payload)
+        ## END for p in packets....
+
+    return len(packets)
 
 
 def _parse_header_lines(lines: List[str]) -> WireHeader:
@@ -867,22 +954,53 @@ class LiveHidFeeder:
         return self._eof
 
 
-class WinUHidFeeder:
-    """Future OS-level virtual HID feeder (WinUHid / VHF).
+def resolve_report_descriptor_hex(header: WireHeader) -> bytes:
+    """Decode ``header.report_descriptor`` hex, or use the Emotiv EEG default."""
+    from emotiv_lsl.winuhid import DEFAULT_EPOCX_REPORT_DESCRIPTOR
 
-    Not implemented in this pass. A later feeder will:
-    1. Create a virtual device with captured ``vid``/``pid`` and ``report_descriptor``.
-    2. Pace ``SubmitInputReport`` from REPORT events in the ``.epocxwire`` file.
+    raw = (header.report_descriptor or "").strip()
+    if raw:
+        try:
+            return bytes.fromhex(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid report_descriptor hex ({len(raw)} chars): {exc}"
+            ) from exc
+    return DEFAULT_EPOCX_REPORT_DESCRIPTOR
+
+
+class WinUHidFeeder:
+    """OS-level virtual HID feeder (WinUHid / VHF).
+
+    1. Creates a virtual device with captured ``vid``/``pid`` and ``report_descriptor``.
+    2. Paces ``SubmitInputReport`` from REPORT events in the ``.epocxwire`` file.
     3. Note: WinUHid may not expose the USB serial string; AES may still need
        header ``serial=`` injection, or a fuller USB emulator (UDECX/Vdevice).
 
-    See README "WinUHid feeder (later)" and ``scripts/feed_winuhid.py``.
+    See README "WinUHid feeder" and ``scripts/feed_winuhid.py``.
     """
 
-    def __init__(self, path: Union[str, Path], *, speed: float = 1.0):
+    def __init__(
+        self,
+        path: Union[str, Path],
+        *,
+        speed: float = 1.0,
+        dll_path: Optional[Union[str, Path]] = None,
+        vid: Optional[int] = None,
+        pid: Optional[int] = None,
+        backend: Any = None,
+    ):
         self.path = Path(path)
-        self.speed = speed
+        self.speed = float(speed)
+        self.dll_path = Path(dll_path) if dll_path is not None else None
+        self._vid_override = vid
+        self._pid_override = pid
+        self._backend = backend
         self._wire: Optional[WireFile] = None
+        self._device: Any = None
+        self._opened = False
+        self._eof = True
+        self._t0_wall: Optional[float] = None
 
     @property
     def header(self) -> WireHeader:
@@ -890,19 +1008,112 @@ class WinUHidFeeder:
             self._wire = read_wire_file(self.path)
         return self._wire.header
 
+    def _ensure_wire(self) -> WireFile:
+        if self._wire is None:
+            self._wire = read_wire_file(self.path)
+        return self._wire
+
+    def _get_backend(self) -> Any:
+        if self._backend is not None:
+            return self._backend
+        from emotiv_lsl.winuhid import WinUHidBackend
+
+        return WinUHidBackend(dll_path=self.dll_path)
+
     def open(self) -> None:
-        raise NotImplementedError(
-            "WinUHidFeeder requires the WinUHid driver/SDK. "
-            "Use ReplayFeeder / main.py --replay for in-process playback, "
-            "or scripts/feed_winuhid.py --dry-run to pace events without a driver."
+        from emotiv_lsl.winuhid import DEFAULT_PID, DEFAULT_VID
+
+        if self._opened:
+            return
+        wire = self._ensure_wire()
+        hdr = wire.header
+        vendor_id = (
+            self._vid_override
+            if self._vid_override is not None
+            else (hdr.vid if hdr.vid is not None else DEFAULT_VID)
         )
+        product_id = (
+            self._pid_override
+            if self._pid_override is not None
+            else (hdr.pid if hdr.pid is not None else DEFAULT_PID)
+        )
+        descriptor = resolve_report_descriptor_hex(hdr)
+        version = int(hdr.release_number or 0) & 0xFFFF
+
+        backend = self._get_backend()
+        device = backend.create(
+            vendor_id=int(vendor_id),
+            product_id=int(product_id),
+            report_descriptor=descriptor,
+            version_number=version,
+        )
+        try:
+            backend.start(device)
+        except Exception:
+            try:
+                backend.destroy(device)
+            except Exception:
+                pass
+            raise
+
+        self._device = device
+        self._opened = True
+        self._eof = False
+        self._t0_wall = None
+
+    def _pace(self, rel_ns: int) -> None:
+        now = time.perf_counter()
+        if self._t0_wall is None:
+            self._t0_wall = now
+        if self.speed > 0:
+            target = self._t0_wall + (rel_ns * 1e-9) / self.speed
+            delay = target - time.perf_counter()
+            if delay > 0:
+                time.sleep(delay)
+
+    def feed(self) -> int:
+        """Pace wire events and submit REPORT payloads. Returns submit count."""
+        if not self._opened or self._device is None:
+            raise RuntimeError("WinUHidFeeder not open")
+        wire = self._ensure_wire()
+        backend = self._get_backend()
+        submitted = 0
+        for ev in wire.events:
+            self._pace(ev.rel_ns)
+            if ev.kind != EVENT_REPORT:
+                continue
+            payload = ev.payload or b""
+            if not payload:
+                continue
+            backend.submit(self._device, payload)
+            submitted += 1
+        ## END for ev in wire.events....
+
+        self._eof = True
+        return submitted
 
     def read(self, size: int = 32) -> bytes:
+        del size
         raise NotImplementedError("WinUHidFeeder is a submit-side feeder, not a reader")
 
     def close(self) -> None:
-        pass
+        device = self._device
+        self._device = None
+        self._opened = False
+        self._eof = True
+        if device is not None:
+            try:
+                self._get_backend().destroy(device)
+            except Exception:
+                pass
 
     @property
     def eof(self) -> bool:
-        return True
+        return self._eof
+
+    def __enter__(self) -> "WinUHidFeeder":
+        self.open()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
