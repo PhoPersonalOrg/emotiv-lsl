@@ -32,17 +32,26 @@ python main.py --replay recording.epocxwire
 #   ./emotiv_lsl --replay recording.epocxwire --replay-speed 0
 ```
 
-#### WinUHid feeder
+#### hidapi shim (old `.exe` / live HID path)
 
-In-process `--replay` covers crypto/decode/save. The OS-level feeder presents `VID_1234`/`PID_ED02` via [WinUHid](https://github.com/lurebat/WinUHid) so any hidapi app sees a virtual dongle. Install the WinUHid driver/SDK and ensure `WinUHid.dll` is on `PATH` (or set `WINUHID_DLL` to its absolute path). The capture file is the source of truth; optional header `report_descriptor=` (hex) recreates collections (live `--record` stores it when hidapi exposes the descriptor; otherwise a built-in Emotiv EEG descriptor is used). Caveat: WinUHid may not expose the USB serial string — AES may still need header `serial=` inject, or a fuller USB emulator (UDECX/Vdevice).
+For binaries **without** `--replay` (e.g. `emotiv_lsl_pre-2026-11-11.exe`), use the process-local shim in `tools/hidapi_shim/`: it presents mfg `Emotiv`, usage `2`, VID `0x1234`, and wire-header `serial=` so AES matches the capture, then paces REPORT payloads from `.epocxwire`.
 
-```bash
-# Pace/print without a driver:
-python scripts/feed_winuhid.py session.epocxwire --dry-run --speed 0
-# Submit REPORT payloads to a virtual HID device:
-python scripts/feed_winuhid.py session.epocxwire --submit
+```powershell
+# Build shim hidapi.dll (VS / CMake), then:
+pixi run python scripts/launch_hid_shim.py session.epocxwire --exe path\to\emotiv_lsl.exe --speed 1
+# LabRecorder XDF vs Python reference:
+pixi run python scripts/compare_xdfs.py lab.xdf --wire session.epocxwire
 ```
 
+#### WinUHid feeder (experimental)
+
+WinUHid is **incomplete for Emotiv** (no reliable USB serial → wrong AES key). Prefer the hidapi shim or in-process `--replay`. Dry-run only is still useful:
+
+```bash
+python scripts/feed_winuhid.py session.epocxwire --dry-run --speed 0
+```
+
+UDECX / USBIP full-USB emulation is deferred unless Device Manager fidelity is required.
 ---
 
 ## Prerequisites

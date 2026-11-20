@@ -18,3 +18,7 @@ emotiv-lsl.7z
 .cursorindexingignore*
 .specstory
 templating/uv_deps_switcher/backups
+
+# hidapi shim build
+tools/hidapi_shim/build/
+

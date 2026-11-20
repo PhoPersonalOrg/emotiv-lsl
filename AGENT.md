@@ -25,7 +25,10 @@
 - Exact HID capture: `python main.py --record session.epocxwire` then `python main.py --replay session.epocxwire`. Format is EPOCXWIRE/2 (REPORT/EMPTY/ERROR/OPEN/CLOSE); v1 still readable. XDF→wire is synthetic; prefer live `--record` for gold fixtures.
 - Replay (synthetic): `python scripts/xdf_to_epocx_wire.py in.xdf -o out.epocxwire` then `python main.py --replay out.epocxwire` (or pass `.xdf` directly). Same `.epocxwire` works with `emotiv-lsl-cpp --replay` (v1; v2 C++ support later — compare script auto-exports v1).
 - Python vs C++ LSL parity: `python scripts/compare_py_cpp_replay.py session.epocxwire` (sequential replay + sample compare; `--cpp-exe` / `EMOTIV_LSL_CPP` if needed).
-- WinUHid OS feeder: `WinUHidFeeder` + ctypes `emotiv_lsl/winuhid.py`. Dry-run: `python scripts/feed_winuhid.py session.epocxwire --dry-run`. Real submit (driver required): `python scripts/feed_winuhid.py session.epocxwire --submit` (`WINUHID_DLL` if DLL not on PATH).
+- Old exe without `--replay`: process-local hidapi shim (`tools/hidapi_shim/`) — build `hidapi.dll`, then `python scripts/launch_hid_shim.py session.epocxwire --exe path\to\emotiv_lsl.exe --speed 1`. Injects wire serial/mfg/usage; prefer over WinUHid.
+- LabRecorder XDF vs Python wire gold: `python scripts/compare_xdfs.py lab.xdf --wire session.epocxwire` (lag-scan on DIFF).
+- WinUHid OS feeder: **experimental / incomplete** (no USB serial → AES breaks). Dry-run only is fine: `python scripts/feed_winuhid.py session.epocxwire --dry-run`. Real submit needs driver + `WINUHID_DLL`.
+- Deferred: UDECX / USBIP full virtual USB only if Device Manager / non-hidapi consumers need fidelity.
 
 ## Code Style
 - **Imports**: Standard library first, then third-party (hid, pylsl, Crypto), then local imports
