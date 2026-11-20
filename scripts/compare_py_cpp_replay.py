@@ -313,6 +313,111 @@ def capture_cpp_lsl(
     return out
 
 
+def _aligned_pair(a: np.ndarray, b: np.ndarray, lag: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Align *b* relative to *a* by ``lag`` (positive => drop leading *a* samples)."""
+    if lag >= 0:
+        n = min(a.shape[0] - lag, b.shape[0])
+        return a[lag : lag + n], b[:n]
+    n = min(a.shape[0], b.shape[0] + lag)
+    return a[:n], b[-lag : -lag + n]
+
+
+def lag_scan(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    atol: float,
+    rtol: float,
+    max_lag: int = 64,
+) -> List[dict]:
+    """Try small integer lags; useful when LSL dropped a few mid-stream samples."""
+    rows: List[dict] = []
+    for lag in range(-max_lag, max_lag + 1):
+        if lag >= 0 and lag >= a.shape[0]:
+            continue
+        if lag < 0 and -lag >= b.shape[0]:
+            continue
+        aa, bb = _aligned_pair(a, b, lag)
+        if aa.shape[0] == 0:
+            continue
+        diff = np.abs(aa - bb)
+        close = np.isclose(aa, bb, atol=atol, rtol=rtol)
+        rows.append(
+            {
+                "lag": lag,
+                "n": int(aa.shape[0]),
+                "max_abs": float(diff.max()),
+                "rmse": float(np.sqrt(np.mean((aa - bb) ** 2))),
+                "frac_close": float(np.mean(close)),
+            }
+        )
+    ## END for lag in range(-max_lag, max_lag + 1)....
+
+    rows.sort(key=lambda r: (r["max_abs"], -r["frac_close"], -r["n"]))
+    return rows
+
+
+def diagnose_streams(
+    py_streams: Dict[str, np.ndarray],
+    cpp_streams: Dict[str, np.ndarray],
+    stream_names: Sequence[str],
+    *,
+    atol: float,
+    rtol: float,
+    effective_speed: float,
+    span_s: float,
+    min_duration: float,
+) -> None:
+    print("\n=== diagnose ===")
+    if effective_speed > 2.0 and span_s > 10.0:
+        print(
+            f"  HINT: C++ paced at speed={effective_speed:.3g} "
+            f"(~{min_duration:.1f}s wall for {span_s:.1f}s wire). "
+            "LSL often drops samples above ~2–4× realtime; re-run with e.g.\n"
+            f"    --min-duration {max(span_s, 30):.0f}   # ~1× realtime\n"
+            "    --speed 1"
+        )
+    for name in stream_names:
+        a = py_streams.get(name)
+        b = cpp_streams.get(name)
+        if a is None or b is None or a.size == 0 or b.size == 0:
+            print(f"  {name}: skip diagnose (missing/empty)")
+            continue
+        dn = int(a.shape[0]) - int(b.shape[0])
+        print(f"  {name}: n_py={a.shape[0]} n_cpp={b.shape[0]} Δn={dn:+d}")
+        rows = lag_scan(a, b, atol=atol, rtol=rtol, max_lag=min(128, max(a.shape[0], b.shape[0]) // 4))
+        best = rows[0]
+        print(
+            f"    best lag={best['lag']:+d}  n={best['n']}  "
+            f"max_abs={best['max_abs']:.6g}  frac_close={best['frac_close']:.4f}"
+        )
+        if best["max_abs"] <= atol and best["frac_close"] >= 0.999:
+            print(
+                "    → values match after lag alignment; difference is almost certainly "
+                "LSL capture drops / misalignment, not a decode bug."
+            )
+        elif abs(dn) > 0 and best["max_abs"] > atol:
+            print(
+                "    → count mismatch + no clean lag; likely multiple LSL drops mid-stream. "
+                "Slow the C++ replay and re-compare."
+            )
+        else:
+            print(
+                "    → residual error after best lag; possible real decode difference. "
+                "Inspect first mismatch samples / packet types next."
+            )
+        # Show a few nearby lags for context.
+        near = [r for r in rows if abs(r["lag"]) <= 3]
+        near.sort(key=lambda r: r["lag"])
+        for r in near:
+            print(
+                f"      lag={r['lag']:+d}  max_abs={r['max_abs']:.6g}  "
+                f"frac_close={r['frac_close']:.4f}"
+            )
+        ## END for r in near....
+    ## END for name in stream_names....
+
+
 def compare_arrays(
     a: np.ndarray,
     b: np.ndarray,
@@ -413,6 +518,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=None,
         help="Keep the temp EPOCXWIRE/1 export at this path",
     )
+    p.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="On DIFF: run lag-scan + pacing hints (also auto-runs when counts differ)",
+    )
     args = p.parse_args(argv)
 
     wire_path = args.wire.expanduser().resolve()
@@ -485,6 +595,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     print("\n=== comparison ===")
     all_ok = True
+    count_mismatch = False
     for name in stream_names:
         a = py_streams.get(name)
         b = cpp_streams.get(name)
@@ -500,9 +611,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         if rep["first_mismatch"] is not None:
             print(f"    first_mismatch: {rep['first_mismatch']}")
+        if not rep["count_match"]:
+            count_mismatch = True
         if not rep["ok"]:
             all_ok = False
     ## END for name in stream_names....
+
+    if not all_ok and (args.diagnose or count_mismatch or effective_speed > 2.0):
+        diagnose_streams(
+            py_streams,
+            cpp_streams,
+            stream_names,
+            atol=args.atol,
+            rtol=args.rtol,
+            effective_speed=effective_speed,
+            span_s=span_s,
+            min_duration=float(args.min_duration),
+        )
 
     if all_ok:
         print("\nPASS: Python and C++ stream samples match within tolerance.")
