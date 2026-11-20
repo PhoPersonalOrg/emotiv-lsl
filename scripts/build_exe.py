@@ -17,17 +17,17 @@ def main() -> None:
         ])
         return
 
-    # Fallback: build from CLI options if spec is missing
+    # Fallback: mirror Windows onefile settings from main.spec when it is absent.
     PyInstaller.__main__.run([
         "main.py",
         "--onefile",
         "--console",
         "--name=emotiv_lsl",
-        "--icon=images\\icons\\emotiv_lsl_icon_design.ico",
-        "--add-data=*.py;.",
+        "--icon=images/icons/emotiv_lsl_icon_design.ico",
+        "--add-data=images/icons/emotiv_lsl_icon_design.ico;images/icons",
         "--hidden-import=pylsl",
-        "--collect-all=mne",
-        "--collect-all=pylsl",
+        "--hidden-import=hid",
+        "--collect-binaries=pylsl",
         f"--distpath={repo_root}/dist",
         f"--workpath={repo_root}/build",
         f"--specpath={repo_root}",
