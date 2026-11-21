@@ -5,6 +5,40 @@ import platform
 
 is_windows: bool = False
 
+
+def _configure_macos_native_libs() -> None:
+    """Prefer Homebrew arm64 dylibs when an Intel /usr/local copy would break import.
+
+    On Apple Silicon, a dual Homebrew install often leaves x86_64 liblsl at
+    /usr/local/lib while arm64 lives under /opt/homebrew/lib. pylsl probes
+    /usr/local first and then fails with an arch mismatch.
+    """
+    if sys.platform != "darwin":
+        return
+    if platform.machine() != "arm64":
+        return
+    if os.environ.get("PYLSL_LIB"):
+        return
+
+    candidates = [
+        "/opt/homebrew/opt/lsl/lib/liblsl.dylib",
+        "/opt/homebrew/lib/liblsl.dylib",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            os.environ["PYLSL_LIB"] = path
+            break
+
+    # Help frozen/onedir loads of bundled hidapi as well.
+    brew_hid = "/opt/homebrew/opt/hidapi/lib"
+    if os.path.isdir(brew_hid):
+        current = os.environ.get("DYLD_FALLBACK_LIBRARY_PATH", "")
+        paths = [brew_hid] + ([current] if current else [])
+        os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = ":".join(paths)
+
+
+_configure_macos_native_libs()
+
 # Add the directory containing the HIDAPI DLL on Windows only
 if sys.platform == "win32":
     if getattr(sys, "frozen", False):
@@ -65,9 +99,30 @@ def enforce_single_instance():
         socket_name = "\0emotiv_lsl_single_instance" if sys.platform.startswith("linux") else "/tmp/emotiv_lsl.sock"
         try:
             s.bind(socket_name)
-        except socket.error as e:
-            print("Another instance is already running. Exiting.")
-            sys.exit(0)
+        except socket.error:
+            # macOS/Linux path sockets can linger after a crash. If nothing is
+            # listening, remove the stale file and bind again.
+            if sys.platform.startswith("linux"):
+                print("Another instance is already running. Exiting.")
+                sys.exit(0)
+            try:
+                probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                try:
+                    probe.connect(socket_name)
+                finally:
+                    probe.close()
+                print("Another instance is already running. Exiting.")
+                sys.exit(0)
+            except socket.error:
+                try:
+                    os.unlink(socket_name)
+                except OSError:
+                    pass
+                try:
+                    s.bind(socket_name)
+                except socket.error:
+                    print("Another instance is already running. Exiting.")
+                    sys.exit(0)
         return s
 
 import threading

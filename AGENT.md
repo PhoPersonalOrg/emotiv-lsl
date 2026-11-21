@@ -2,11 +2,17 @@
 
 ## Build/Run/Test Commands
 - **Run main LSL server**: `python main.py`
-- **Install dependencies**: `pip install -r requirements.txt` or `pip install -r requirements_for_mamba.txt`
+- **macOS (Apple Silicon) setup**:
+  - `brew install hidapi libusb labstreaminglayer/tap/lsl`
+  - Use a **native arm64** toolchain (`arch -arm64 zsh`, arm64 `uv`); avoid Rosetta-only envs when `/usr/local` has Intel `liblsl`
+  - `uv python pin 3.12 && uv sync`
+  - List receiver: `python scripts/list_emotiv_hid.py`
+  - Build app: `python scripts/build_macOS_app.py` → `dist/emotiv_lsl/emotiv_lsl`
+- **Offline tests**: `python -m tests.test_epoc_x_decode` and `python -m tests.test_epocx_wire`
+- **Install dependencies**: `uv sync` (preferred) or `pip install -r requirements.txt`
 - **Setup conda env**: `conda create -n lsl_env python=3.8 && conda activate lsl_env && conda install -c conda-forge liblsl`
 - **View LSL stream**: `bsl_stream_viewer` (after installing bsl)
 - **Run examples**: `python examples/read_data.py` or `python examples/pho_read_and_export_mne.py`
-- **No formal tests**: Project uses manual testing with hardware
 
 ## Architecture
 - **Main entry**: `main.py` instantiates EmotivEpocX and runs main_loop()

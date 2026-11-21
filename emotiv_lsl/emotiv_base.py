@@ -75,13 +75,9 @@ class EmotivBase(EasyTimeSyncParsingMixin):
 
 
     def get_hid_device(self):
-        # raise NotImplementedError(f'Specific hardware class (e.g. Epoc X) must override this to provide a concrete implementation.')
-        import hid
-        for device in hid.enumerate():
-            if device.get('manufacturer_string', '') == 'Emotiv' and ((device.get('usage', 0) == 2 or device.get('usage', 0) == 0 and device.get('interface_number', 0) == 1)):
-                return device
-        raise Exception('Emotiv Epoc Base Headset not found')
-        pass
+        from emotiv_lsl.hid_device import find_emotiv_hid_device
+
+        return find_emotiv_hid_device()
     
 
 
@@ -226,17 +222,11 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                 f"speed={self.replay_speed}"
             )
         else:
-            import hid
+            from emotiv_lsl.hid_device import open_emotiv_hid_device
 
             ## Get the device info
             device = self.get_hid_device()
-            # ctypes pyhidapi: hid.Device(path=...) opens in the constructor.
-            # Cython hidapi: hid.device() then open_path(path).
-            if hasattr(hid, "Device"):
-                hid_device = hid.Device(path=device['path'])
-            else:
-                hid_device = hid.device()
-                hid_device.open_path(device['path'])
+            hid_device = open_emotiv_hid_device(device)
             if self.is_reverse_engineer_mode:
                 logger.debug(f'hid_device: {hid_device}\n\twith path: {device["path"]}\n')
         
@@ -335,7 +325,10 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                                     logger.debug(f'set up motion outlet!')
                                 motion_outlet.push_sample(decoded)
                             elif self.enable_debug_logging:
-                                logger.debug(f"Packet #{packet_count}: Motion data decoded but disabled (enable_motion_data=False)")
+                                logger.debug(
+                                    f"Packet #{packet_count}: Motion packet skipped "
+                                    f"(enable_motion_data=False)"
+                                )
 
                         elif len(decoded) == 14:  # EEG data has 14 channels
                             if self.enable_debug_logging:
@@ -347,8 +340,13 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                             _mark_eeg_received()
                         else:
                             logger.debug(f"Packet #{packet_count}: Unknown data type with {len(decoded)} channels")
-                    else:
-                        logger.debug(f"Packet #{packet_count}: self.decode_data(data) failed -- data packet (skipped)")
+                    elif self.enable_debug_logging:
+                        # Common on Epoc X: Mode-7 type 0x20 motion while motion LSL is off,
+                        # or other non-EEG types. Not a decrypt failure.
+                        logger.debug(
+                            f"Packet #{packet_count}: non-EEG HID report skipped "
+                            f"(len={len(data)})"
+                        )
                 else:
                     logger.debug(f"Packet #{packet_count}: Invalid data packet, length={len(data)}")
 

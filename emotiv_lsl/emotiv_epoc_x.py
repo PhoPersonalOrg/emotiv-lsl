@@ -95,16 +95,9 @@ class EmotivEpocX(EmotivBase):
         return ADC_DIV_16BIT if self.eeg_resolution_bits == 0x10 else ADC_DIV_14BIT
 
     def get_hid_device(self):
-        import hid
+        from emotiv_lsl.hid_device import find_emotiv_hid_device
 
-        for device in hid.enumerate():
-            if (device.get("manufacturer_string", "") == "Emotiv") and (
-                device.get("usage", 0) == 2
-                or device.get("usage", 0) == 0
-                and device.get("interface_number", 0) == 1
-            ):
-                return device
-        raise Exception("Emotiv Epoc X not found")
+        return find_emotiv_hid_device()
 
     def get_crypto_key(self) -> bytearray:
         """AES-128 key via Android EpocXMode schedule (Version2, fw <= 0x73e).
