@@ -28,6 +28,9 @@ class EmotivBase(EasyTimeSyncParsingMixin):
     # Optional WireReplaySource; when set, main_loop skips HID and paces packets.
     replay_source: Any = field(default=None)
     replay_speed: float = field(default=1.0)
+    # Optional WireSessionRecorder (or path str/Path); logs every HID read before decode.
+    wire_recorder: Any = field(default=None)
+    record_path: Any = field(default=None)
     # Called with True/False on connected/disconnected transitions after first EEG success
     on_connection_change: Optional[Callable[[bool], None]] = field(default=None)
     # Milliseconds for timed HID reads; keeps the loop responsive for disconnect checks
@@ -216,12 +219,31 @@ class EmotivBase(EasyTimeSyncParsingMixin):
         logger = logging.getLogger(f'emotiv.{self.device_name.replace(" ", "_").lower()}')
 
         hid_device = None
+        recorder = self.wire_recorder
+        if recorder is None and self.record_path is not None:
+            from emotiv_lsl.epocx_wire import WireSessionRecorder, header_from_hid_device
+
+            # Header filled after HID open (or from replay serial).
+            recorder = None  # created below once device info is known
+            _pending_record_path = self.record_path
+        else:
+            _pending_record_path = None
+
         if self.replay_source is not None:
             print(
                 f"Replay mode: serial={getattr(self.replay_source.header, 'serial', '?')} "
                 f"speed={self.replay_speed}"
             )
+            if _pending_record_path is not None:
+                from emotiv_lsl.epocx_wire import WireSessionRecorder
+
+                hdr = self.replay_source.header
+                recorder = WireSessionRecorder(_pending_record_path, hdr)
+                recorder.open()
+                print(f"Recording replay→wire to {_pending_record_path}")
         else:
+            import hid
+            from emotiv_lsl.epocx_wire import WireSessionRecorder, header_from_hid_device
             from emotiv_lsl.hid_device import open_emotiv_hid_device
 
             ## Get the device info
@@ -229,7 +251,28 @@ class EmotivBase(EasyTimeSyncParsingMixin):
             hid_device = open_emotiv_hid_device(device)
             if self.is_reverse_engineer_mode:
                 logger.debug(f'hid_device: {hid_device}\n\twith path: {device["path"]}\n')
-        
+
+            if recorder is None and _pending_record_path is not None:
+                hdr = header_from_hid_device(
+                    device,
+                    serial_source=getattr(self, "serial_source", "hid") or "hid",
+                    adc_div=float(getattr(self, "adc_div", 7.8)),
+                    read_size=self.READ_SIZE,
+                    read_timeout_ms=self.hid_read_timeout_ms,
+                )
+                if self.serial_number:
+                    hdr.serial = str(self.serial_number)
+                elif device.get("serial_number"):
+                    sn = device["serial_number"]
+                    hdr.serial = sn.decode("utf-8", errors="replace") if isinstance(sn, bytes) else str(sn)
+                recorder = WireSessionRecorder(_pending_record_path, hdr)
+                recorder.open()
+                print(f"Recording HID session to {_pending_record_path}")
+            elif recorder is not None and getattr(recorder, "_f", None) is None:
+                recorder.open()
+
+        self.wire_recorder = recorder
+
         packet_count = 0
         ever_connected = False
         is_connected = False
@@ -260,6 +303,15 @@ class EmotivBase(EasyTimeSyncParsingMixin):
             ):
                 _mark_disconnected(f"no EEG for {self.disconnect_timeout_sec:.1f}s")
 
+        def _record_raw(data) -> None:
+            if recorder is None:
+                return
+            if not data:
+                recorder.record_empty()
+            else:
+                payload = bytes(data) if not isinstance(data, (bytes, bytearray)) else bytes(data)
+                recorder.record_report(payload)
+
         # hidapi exposes read(max_length, timeout_ms=0); fall back to positional for older builds
         use_timeout_ms_kwarg = True
         try:
@@ -267,7 +319,7 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                 try:
                     if self.replay_source is not None:
                         data = self.replay_source.read(self.READ_SIZE)
-                        if not data:
+                        if not data and getattr(self.replay_source, "eof", True):
                             print(f"Replay finished after {packet_count} packet(s)")
                             _mark_disconnected("replay finished")
                             break
@@ -280,8 +332,16 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                     use_timeout_ms_kwarg = False
                     data = hid_device.read(self.READ_SIZE, self.hid_read_timeout_ms)
                 except Exception as e:
+                    if recorder is not None:
+                        try:
+                            recorder.record_error(str(e))
+                        except Exception:
+                            pass
                     _mark_disconnected(f"HID read error: {e}")
                     raise
+
+                # Capture every read outcome before validate/decode (including empty gaps).
+                _record_raw(data)
 
                 if not data:
                     _check_disconnect_timeout()
@@ -352,9 +412,19 @@ class EmotivBase(EasyTimeSyncParsingMixin):
 
                 _check_disconnect_timeout()
         except Exception as e:
+            if recorder is not None:
+                try:
+                    recorder.record_error(f"loop error: {e}")
+                except Exception:
+                    pass
             _mark_disconnected(f"loop error: {e}")
             raise
         finally:
+            if recorder is not None:
+                try:
+                    recorder.close()
+                except Exception:
+                    pass
             if hid_device is not None:
                 try:
                     hid_device.close()
