@@ -52,23 +52,37 @@ if sys.platform == "win32":
 
 elif sys.platform == "darwin":
     # Homebrew installs hidapi to different prefixes on Intel vs Apple Silicon.
-    _mac_search_dirs = [
-        "/opt/homebrew/opt/hidapi/lib",   # Apple Silicon (Homebrew default)
-        "/opt/homebrew/lib",
-        "/usr/local/opt/hidapi/lib",       # Intel Mac (Homebrew default)
-        "/usr/local/lib",
-    ]
+    # Prefer the prefix that matches this Python's arch so a dual-brew machine
+    # does not overwrite arm64 dylibs with /usr/local x86_64 copies.
+    import platform as _platform
+    _mac_machine = _platform.machine()
+    if _mac_machine == "arm64":
+        _mac_search_dirs = [
+            "/opt/homebrew/opt/hidapi/lib",
+            "/opt/homebrew/lib",
+        ]
+    else:
+        _mac_search_dirs = [
+            "/usr/local/opt/hidapi/lib",
+            "/usr/local/lib",
+            "/opt/homebrew/opt/hidapi/lib",
+            "/opt/homebrew/lib",
+        ]
     _mac_lib_names = [
         "libhidapi.dylib",
         "libhidapi-iohidmanager.dylib",
         "libhidapi-libusb.dylib",
         "libhidapi.0.dylib",
     ]
+    _seen_names = set()
     for _d in _mac_search_dirs:
         for _n in _mac_lib_names:
+            if _n in _seen_names:
+                continue
             _src = os.path.join(_d, _n)
             if os.path.exists(_src):
                 hidapi_bins.append((_src, "Contents/Frameworks"))
+                _seen_names.add(_n)
     if not hidapi_bins:
         print("WARNING: hidapi dylibs not found. "
               "Install with: brew install hidapi")
@@ -108,6 +122,30 @@ else:
             _reason = "ldconfig did not list it" if _ldconfig_available else "ldconfig unavailable"
             print(f"WARNING: hidapi not found on Linux ({_reason}). "
                   "Install with: sudo apt-get install libhidapi-dev")
+
+# Force-include a liblsl that matches this Python arch when pylsl's search
+# would otherwise pick the wrong Homebrew prefix on dual-install Macs.
+if sys.platform == "darwin" and not any(
+    "liblsl" in os.path.basename(src) for src, _dest in (pylsl_bins + extra_lsl_bins)
+):
+    import platform as _platform
+    _lsl_candidates = (
+        (
+            "/opt/homebrew/opt/lsl/lib/liblsl.dylib",
+            "/opt/homebrew/lib/liblsl.dylib",
+        )
+        if _platform.machine() == "arm64"
+        else (
+            "/usr/local/opt/lsl/lib/liblsl.dylib",
+            "/usr/local/lib/liblsl.dylib",
+            "/opt/homebrew/opt/lsl/lib/liblsl.dylib",
+            "/opt/homebrew/lib/liblsl.dylib",
+        )
+    )
+    for _lsl in _lsl_candidates:
+        if os.path.exists(_lsl):
+            extra_lsl_bins.append((_lsl, "pylsl/lib"))
+            break
 
 binaries = pylsl_bins + extra_lsl_bins + hidapi_bins
 

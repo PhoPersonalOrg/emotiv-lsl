@@ -81,7 +81,7 @@
 			}
 		},
 		"terminal.integrated.defaultProfile.windows": "lsl-env-powershell",
-		"python.defaultInterpreterPath": "${workspaceFolder:emotiv-lsl}/.venv/Scripts/python.exe",
+		"python.defaultInterpreterPath": "${workspaceFolder:emotiv-lsl}/.venv/bin/python",
 		"python.terminal.activateEnvironment": true,
 		"python.languageServer": "None",
 		"editor.fontSize": 12,

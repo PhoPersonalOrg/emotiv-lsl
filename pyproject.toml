@@ -18,8 +18,11 @@ dependencies = [
     "seaborn>=0.13.2",
     "setuptools>=75.3.2,<81",
     "wheel>=0.45.1",
+    # PyQt5: skip on Linux aarch64 (no wheels). On macOS arm64 use a Qt5 build that
+    # ships macosx_11_0_arm64 wheels; the old 5.15.2 pin is Intel/Win/Linux x86_64 only.
     "pyqt5>=5.15.7,<6; platform_machine != 'aarch64' or sys_platform != 'linux'",
     "pyqt5-qt5==5.15.2; (platform_machine != 'aarch64' or sys_platform != 'linux') and platform_machine != 'arm64'",
+    "pyqt5-qt5>=5.15.14; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "pyshark>=0.6",
     "scipy>=1.10.1",
     "attrs>=22.2.0",

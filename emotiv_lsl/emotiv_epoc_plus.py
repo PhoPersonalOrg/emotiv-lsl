@@ -29,10 +29,9 @@ class EmotivEpocPlus(EmotivBase):
 
 
     def get_hid_device(self):
-        for device in hid.enumerate():
-            if device.get('manufacturer_string', '') == 'Emotiv' and ((device.get('usage', 0) == 2 or device.get('usage', 0) == 0 and device.get('interface_number', 0) == 1)):
-                return device
-        raise Exception('Emotiv Epoc+ not found')
+        from emotiv_lsl.hid_device import find_emotiv_hid_device
+
+        return find_emotiv_hid_device()
 
     def get_crypto_key(self) -> bytearray:
         serial = self.get_hid_device()['serial_number']

@@ -8,7 +8,22 @@ LSL (Lab Streaming Layer) server for the Emotiv EPOC X headset, based on the ori
 - EEG path is aligned to EmotivPRO Android **Mode 7** (EpocPlus LE16 + `getRawEegId` remap + ADC ÷7.8). Transport remains **USB HID**.
 - Crypto uses Version2 **EpocXMode** (XOR `0x55` → AES-128-ECB). Firmware V4 / `findKey` is unsupported.
 - Motion LSL defaults off; a 20-byte Android Q/ACC/MAG decoder is present for when HID/BLE exposes that report.
-- Offline checks: `pixi run python -m tests.test_epoc_x_decode` and `python -m tests.test_epocx_wire`
+- Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`, and `python -m tests.test_flutter_raw_csv`
+
+### Flutter session `raw.csv` → offline decode / wire replay
+
+The Flutter logger always writes undecrypted BLE payloads to `raw.csv` (plus `btKeyHex` / `serialSource` in `session.json`). Re-decode after transfer:
+
+```bash
+python scripts/decode_flutter_raw_csv.py /path/to/session_2025-…
+# writes eeg_offline.csv + motion_offline.csv in that folder
+
+python scripts/decode_flutter_raw_csv.py /path/to/session_2025-… \
+  -o /path/to/session_2025-…/replay.epocxwire
+python main.py --replay /path/to/session_2025-…/replay.epocxwire --replay-speed 0
+```
+
+Payload length classifies EEG (multiples of 32) vs motion (multiples of 20); the CSV `kind` column is advisory only.
 
 ### Exact HID session capture + replay (headset emulator)
 
@@ -64,6 +79,23 @@ UDECX / USBIP full-USB emulation is deferred unless Device Manager fidelity is r
 
 ## Installation
 ### Basic Steps
+
+### macOS (Apple Silicon)
+```bash
+brew install hidapi libusb labstreaminglayer/tap/lsl
+# Use a native arm64 shell/uv (not Rosetta) so pylsl links the arm64 Homebrew liblsl
+uv python pin 3.12
+uv sync
+source .venv/bin/activate
+
+# Confirm the USB receiver is visible, then stream:
+python scripts/list_emotiv_hid.py
+python main.py
+
+# Optional frozen binary:
+python scripts/build_macOS_app.py
+./dist/emotiv_lsl/emotiv_lsl
+```
 
 ## Install Pixi:
 ```ps1
