@@ -23,6 +23,15 @@
 		},
 		{
 			"path": "../emotiv-lsl-cpp"
+		},
+		{
+			"path": "../App-LabRecorder"
+		},
+		{
+			"path": "../App-LabRecorder-iOS"
+		},
+		{
+			"path": "../flutter_application_final_emotiv_logger"
 		}
 	],
 	"settings": {

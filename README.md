@@ -8,7 +8,7 @@ LSL (Lab Streaming Layer) server for the Emotiv EPOC X headset, based on the ori
 - EEG path is aligned to EmotivPRO Android **Mode 7** (EpocPlus LE16 + `getRawEegId` remap + ADC ÷7.8). Transport remains **USB HID**.
 - Crypto uses Version2 **EpocXMode** (XOR `0x55` → AES-128-ECB). Firmware V4 / `findKey` is unsupported.
 - Motion LSL defaults off; a 20-byte Android Q/ACC/MAG decoder is present for when HID/BLE exposes that report.
-- Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`, and `python -m tests.test_flutter_raw_csv`
+- Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`, `python -m tests.test_flutter_raw_csv`, `python -m tests.test_client_compat`, and `python -m tests.test_client_compat_flutter`
 
 ### Flutter session `raw.csv` → offline decode / wire replay
 
@@ -45,6 +45,27 @@ python scripts/xdf_to_epocx_wire.py recording.xdf -o recording.epocxwire
 python main.py --replay recording.epocxwire
 # Same dump works with emotiv-lsl-cpp:
 #   ./emotiv_lsl --replay recording.epocxwire --replay-speed 0
+```
+
+#### Headset-client compatibility suite (Python / C++ / Flutter)
+
+Layered tests under `tests/` treat three clients: Python `emotiv-lsl`, C++ `emotiv-lsl-cpp`, and Flutter `flutter_application_final_emotiv_logger` (via synthetic `raw.csv` + `session.json` → `.epocxwire`). Hard-assert EEG (+ CQ for HID path) sample parity. Flutter-specific LSL/schema gaps (no eQuality, motion type `Accelerometer`, BLE `source_id`) live in `test_client_compat_inventory`. C++ LSL subprocess compare runs only when a binary is found.
+
+```bash
+# Always (offline decode + inventory)
+python -m tests.test_client_compat
+python -m tests.test_client_compat_flutter
+python -m tests.test_client_compat_inventory
+
+# With C++ LSL compare (sibling build or explicit path)
+EMOTIV_LSL_CPP=../emotiv-lsl-cpp/build/install/emotiv_lsl python -m tests.test_client_compat
+EMOTIV_LSL_CPP=../emotiv-lsl-cpp/build/install/emotiv_lsl python -m tests.test_client_compat_flutter
+
+# Manual one-shot CLI (same helpers)
+python scripts/compare_py_cpp_replay.py session.epocxwire
+
+# Flutter in-app crypto gate (from sibling Flutter repo)
+#   flutter test test/crypto_codec_test.dart
 ```
 
 #### hidapi shim (old `.exe` / live HID path)

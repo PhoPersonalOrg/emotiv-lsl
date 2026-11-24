@@ -8,7 +8,8 @@
   - `uv python pin 3.12 && uv sync`
   - List receiver: `python scripts/list_emotiv_hid.py`
   - Build app: `python scripts/build_macOS_app.py` → `dist/emotiv_lsl/emotiv_lsl`
-- **Offline tests**: `python -m tests.test_epoc_x_decode` and `python -m tests.test_epocx_wire`
+- **Offline tests**: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`, `python -m tests.test_flutter_raw_csv`
+- **Client compat (headset emulator)**: `python -m tests.test_client_compat`, `python -m tests.test_client_compat_flutter`, and `python -m tests.test_client_compat_inventory` (offline always; C++ LSL compare skips unless `EMOTIV_LSL_CPP` or sibling `emotiv-lsl-cpp` build is found). Flutter in-app crypto gate: `flutter test test/crypto_codec_test.dart` in sibling `flutter_application_final_emotiv_logger`.
 - **Install dependencies**: `uv sync` (preferred) or `pip install -r requirements.txt`
 - **Setup conda env**: `conda create -n lsl_env python=3.8 && conda activate lsl_env && conda install -c conda-forge liblsl`
 - **View LSL stream**: `bsl_stream_viewer` (after installing bsl)
@@ -27,10 +28,11 @@
 - Crypto: Version2 EpocXMode key schedule; XOR `0x55` → AES-128-ECB. V4/`findKey` unsupported.
 - Transport remains USB HID only (no BLE GATT stack here). BLE checklist lives in the reverse-engineer protocol memory (`epocx-ble-protocol.md`).
 - Motion: Android 20 B BE Q/ACC/MAG decoder exists; LSL motion defaults off until a real 20 B HID report is confirmed.
-- Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`
+- Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`, `python -m tests.test_client_compat`, `python -m tests.test_client_compat_flutter`
 - Exact HID capture: `python main.py --record session.epocxwire` then `python main.py --replay session.epocxwire`. Format is EPOCXWIRE/2 (REPORT/EMPTY/ERROR/OPEN/CLOSE); v1 still readable. XDF→wire is synthetic; prefer live `--record` for gold fixtures.
 - Replay (synthetic): `python scripts/xdf_to_epocx_wire.py in.xdf -o out.epocxwire` then `python main.py --replay out.epocxwire` (or pass `.xdf` directly). Same `.epocxwire` works with `emotiv-lsl-cpp --replay` (v1; v2 C++ support later — compare script auto-exports v1).
-- Python vs C++ LSL parity: `python scripts/compare_py_cpp_replay.py session.epocxwire` (sequential replay + sample compare; `--cpp-exe` / `EMOTIV_LSL_CPP` if needed).
+- Python vs C++ LSL parity (suite): `python -m tests.test_client_compat` — hard EEG/CQ sample asserts; optional C++ subprocess when binary present. Flutter session path: `python -m tests.test_client_compat_flutter`. Inventory layer: `python -m tests.test_client_compat_inventory`.
+- Python vs C++ LSL parity (CLI): `python scripts/compare_py_cpp_replay.py session.epocxwire` (sequential replay + sample compare; `--cpp-exe` / `EMOTIV_LSL_CPP` if needed).
 - Old exe without `--replay`: process-local hidapi shim (`tools/hidapi_shim/`) — build `hidapi.dll`, then `python scripts/launch_hid_shim.py session.epocxwire --exe path\to\emotiv_lsl.exe --speed 1`. Injects wire serial/mfg/usage; prefer over WinUHid.
 - LabRecorder XDF vs Python wire gold: `python scripts/compare_xdfs.py lab.xdf --wire session.epocxwire` (lag-scan on DIFF).
 - WinUHid OS feeder: **experimental / incomplete** (no USB serial → AES breaks). Dry-run only is fine: `python scripts/feed_winuhid.py session.epocxwire --dry-run`. Real submit needs driver + `WINUHID_DLL`.
