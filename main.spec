@@ -6,7 +6,7 @@ import os
 import sys
 import subprocess
 
-from PyInstaller.utils.hooks import collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
 
 # ---------------------------------------------------------------------------
 # liblsl – bundled with modern pylsl wheels (>=1.14).
@@ -15,6 +15,13 @@ from PyInstaller.utils.hooks import collect_dynamic_libs
 # system paths only when the wheel carries no bundled copy.
 # ---------------------------------------------------------------------------
 pylsl_bins = collect_dynamic_libs("pylsl")
+
+# ---------------------------------------------------------------------------
+# mne – imported transitively via phopylslhelper.  MNE uses lazy_loader, which
+# requires the package's .pyi stub files at import time.  Those stubs are not
+# picked up by Analysis alone, so collect_all is required.
+# ---------------------------------------------------------------------------
+mne_datas, mne_bins, mne_hiddenimports = collect_all("mne")
 
 extra_lsl_bins = []
 if sys.platform not in ("win32", "darwin") and not pylsl_bins:
@@ -147,14 +154,18 @@ if sys.platform == "darwin" and not any(
             extra_lsl_bins.append((_lsl, "pylsl/lib"))
             break
 
-binaries = pylsl_bins + extra_lsl_bins + hidapi_bins
+binaries = pylsl_bins + extra_lsl_bins + hidapi_bins + mne_bins
+datas = [
+    ('images/icons/emotiv_lsl_icon_design.ico', 'images/icons'),
+] + mne_datas
+hiddenimports = ['pylsl', 'hid', 'mne'] + mne_hiddenimports
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=binaries,
-    datas=[('images/icons/emotiv_lsl_icon_design.ico', 'images/icons')],
-    hiddenimports=['pylsl', 'hid'],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

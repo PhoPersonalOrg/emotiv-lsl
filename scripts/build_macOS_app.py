@@ -27,6 +27,8 @@ def main() -> None:
         "--icon=images/icons/emotiv_lsl_icon_design.ico",
         "--hidden-import=pylsl",
         "--hidden-import=hid",
+        "--hidden-import=mne",
+        "--collect-all=mne",
         "--collect-binaries=pylsl",
         f"--distpath={repo_root}/dist",
         f"--workpath={repo_root}/build",
