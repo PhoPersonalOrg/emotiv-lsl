@@ -113,9 +113,10 @@ source .venv/bin/activate
 python scripts/list_emotiv_hid.py
 python main.py
 
-# Optional frozen binary:
+# Optional frozen single-file binary (also installs to ~/bin/emotiv_lsl):
 python scripts/build_macOS_app.py
-./dist/emotiv_lsl/emotiv_lsl
+./dist/emotiv_lsl
+# or: emotiv_lsl   # if ~/bin is on PATH
 ```
 
 ## Install Pixi:

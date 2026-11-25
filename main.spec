@@ -88,7 +88,7 @@ elif sys.platform == "darwin":
                 continue
             _src = os.path.join(_d, _n)
             if os.path.exists(_src):
-                hidapi_bins.append((_src, "Contents/Frameworks"))
+                hidapi_bins.append((_src, "."))
                 _seen_names.add(_n)
     if not hidapi_bins:
         print("WARNING: hidapi dylibs not found. "
@@ -175,8 +175,8 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
-# Windows: single-file exe. macOS/Linux: onedir via COLLECT.
-if sys.platform == "win32":
+# Windows/macOS: single-file exe. Linux: onedir via COLLECT.
+if sys.platform in ("win32", "darwin"):
     exe = EXE(
         pyz,
         a.scripts,
@@ -188,7 +188,8 @@ if sys.platform == "win32":
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
-        upx=True,
+        # UPX regularly breaks macOS codesign / launch; keep it for Windows only.
+        upx=(sys.platform == "win32"),
         upx_exclude=[],
         runtime_tmpdir=None,
         console=True,

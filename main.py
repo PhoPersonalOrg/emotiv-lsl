@@ -57,15 +57,13 @@ if sys.platform == "win32":
             os.add_dll_directory(dll_dir)
     is_windows = True
 
-# Hint the loader about bundled hidapi on macOS when frozen
+# Hint the loader about bundled hidapi on macOS when frozen.
+# Onefile extracts dylibs under sys._MEIPASS; onedir/.app may use Frameworks.
 if sys.platform == "darwin" and getattr(sys, 'frozen', False):
     exe_dir = os.path.dirname(sys.executable)
-    # Prefer Frameworks inside the .app bundle
     frameworks_dir = os.path.normpath(os.path.join(exe_dir, '..', 'Frameworks'))
-    candidates = [
-        frameworks_dir,
-        exe_dir,
-    ]
+    _meipass = getattr(sys, "_MEIPASS", None)
+    candidates = [p for p in [_meipass, frameworks_dir, exe_dir] if p]
     for candidate in candidates:
         if os.path.isdir(candidate):
             current = os.environ.get('DYLD_FALLBACK_LIBRARY_PATH', '')
