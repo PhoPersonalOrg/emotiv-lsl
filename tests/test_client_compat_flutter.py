@@ -1,6 +1,7 @@
 """Flutter logger as third headset client: session → offline → wire → Python/C++.
 
-Hard-fail EEG sample parity. CQ LSL is out of scope (Flutter has no eQuality outlet).
+Hard-fail EEG sample parity. Live Flutter also publishes ``Epoc X eQuality``
+(14-ch broadcast Mode-7 CQ); offline CSV decode exercises raw.csv → EEG/wire.
 """
 from __future__ import annotations
 

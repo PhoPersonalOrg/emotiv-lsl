@@ -13,12 +13,6 @@
 			"path": "../lab-recorder-python"
 		},
 		{
-			"path": "../python_xdf_streamer"
-		},
-		{
-			"path": "../stream_viewer"
-		},
-		{
 			"path": "../continuous_video_recorder"
 		},
 		{
@@ -32,6 +26,27 @@
 		},
 		{
 			"path": "../flutter_application_final_emotiv_logger"
+		},
+		{
+			"path": "../pyPhoTimeline"
+		},
+		{
+			"path": "../mne-python"
+		},
+		{
+			"path": "../NeuroPy"
+		},
+		{
+			"path": "../phopylslhelper"
+		},
+		{
+			"path": "../PhoPyMNEHelper"
+		},
+		{
+			"path": "../pyPhoCoreHelpers"
+		},
+		{
+			"path": "../emotiv-rs-recorder"
 		}
 	],
 	"settings": {

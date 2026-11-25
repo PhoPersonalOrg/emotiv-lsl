@@ -28,6 +28,7 @@ from tests.compat_helpers import (  # noqa: E402
     FLUTTER_LSL_EEG_NAME,
     FLUTTER_LSL_MOTION_NAME,
     FLUTTER_LSL_MOTION_TYPE,
+    FLUTTER_LSL_QUALITY_NAME,
     build_synthetic_flutter_session,
     build_synthetic_wire,
     make_flutter_headset_for_info,
@@ -128,12 +129,18 @@ class TestFlutterClientInventory(unittest.TestCase):
         self.assertEqual(FLUTTER_LSL_EEG_NAME, EEG_STREAM_NAME)
         self.assertEqual(FLUTTER_LSL_MOTION_NAME, MOTION_STREAM_NAME)
 
-    def test_no_equality_lsl_outlet(self):
-        """Flutter does not publish Epoc X eQuality (word7 CQ not exported)."""
-        self.assertFalse(FLUTTER_HAS_EQUALITY_LSL)
-        self.assertNotEqual(QUALITY_STREAM_NAME, "")  # Python/C++ still have it
-        hs = make_flutter_headset_for_info(enable_quality=False)
-        self.assertFalse(hs.enable_electrode_quality_stream)
+    def test_equality_lsl_outlet(self):
+        """Flutter publishes Epoc X eQuality (Mode-7 word7 broadcast CQ)."""
+        self.assertTrue(FLUTTER_HAS_EQUALITY_LSL)
+        self.assertEqual(FLUTTER_LSL_QUALITY_NAME, QUALITY_STREAM_NAME)
+        hs = make_flutter_headset_for_info(enable_quality=True)
+        self.assertTrue(hs.enable_electrode_quality_stream)
+        snap = stream_info_snapshot(
+            hs.get_lsl_outlet_electrode_quality_stream_info()
+        )
+        self.assertEqual(snap["name"], FLUTTER_LSL_QUALITY_NAME)
+        self.assertEqual(snap["type"], "Raw")
+        self.assertEqual(snap["channel_count"], 14)
 
     def test_motion_lsl_type_divergence(self):
         """Flutter LSL motion type is Accelerometer; Python/C++ use SIGNAL."""
