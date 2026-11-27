@@ -79,8 +79,15 @@ class TestOfflineDecodeGold(unittest.TestCase):
         self.assertEqual(eeg.shape, (2, 14))
         self.assertEqual(quality.shape, (2, 14))
         self.assertAlmostEqual(float(eeg[0, 0]), FIXTURE_AF3_UV, places=9)
-        # Fixture packets have word7=0x2B on counters 1..2 -> norm < 0.2 -> grade 0 across all channels.
-        self.assertTrue(np.array_equal(quality, np.zeros((2, 14), dtype=np.float64)))
+        # Fixture packets have word7=0x2B (43) on counters 1..2 -> slots 1 (FC5, idx 3) and 2 (AF3, idx 0).
+        from emotiv_lsl.emotiv_epoc_x import cq_norm_to_score
+
+        exp_q0 = np.zeros(14, dtype=np.float64)
+        exp_q0[3] = cq_norm_to_score((float(0x2B) * 0.25) / 216.0)
+        exp_q1 = exp_q0.copy()
+        exp_q1[0] = cq_norm_to_score((float(0x2B) * 0.25) / 226.0)
+        self.assertTrue(np.allclose(quality[0], exp_q0, atol=1e-6))
+        self.assertTrue(np.allclose(quality[1], exp_q1, atol=1e-6))
 
     def test_synthetic_encode_decode_roundtrip(self):
         wire = build_synthetic_wire(n_packets=16)
@@ -100,13 +107,18 @@ class TestOfflineDecodeGold(unittest.TestCase):
                 self.assertAlmostEqual(float(eeg[i, ch]), expected, places=9)
             ## END for ch in range(14)....
 
-            self.assertTrue(np.array_equal(quality[i], expected_cq[i]))
+            self.assertTrue(np.allclose(quality[i], expected_cq[i], atol=1e-5))
         ## END for i in range(16)....
 
-        # Verify distinct non-uniform per-electrode grades {0, 1, 2, 4} and sticky hold on counters 14..16.
-        self.assertEqual(set(np.unique(quality[-1]).tolist()), {0.0, 1.0, 2.0, 4.0})
-        self.assertTrue(np.array_equal(quality[13], quality[12]))
-        self.assertTrue(np.array_equal(quality[15], quality[12]))
+        # Verify continuous non-categorical per-electrode scores across all 4 regimes and sticky hold on counters 14..16.
+        last_row = quality[-1]
+        self.assertGreater(len(np.unique(np.round(last_row, 4))), 8)
+        self.assertTrue(np.any((last_row > 0.0) & (last_row < 1.0)))
+        self.assertTrue(np.any((last_row >= 1.0) & (last_row < 2.0)))
+        self.assertTrue(np.any((last_row >= 2.0) & (last_row < 3.0)))
+        self.assertTrue(np.any(last_row >= 3.0))
+        self.assertTrue(np.allclose(quality[13], quality[12], atol=1e-6))
+        self.assertTrue(np.allclose(quality[15], quality[12], atol=1e-6))
 
 
 class TestPythonStreamInfoSchema(unittest.TestCase):

@@ -158,25 +158,45 @@ class TestMode7Decode(unittest.TestCase):
             self.assertAlmostEqual(a, b, places=9)
         ## END for a, b in zip(eeg, expected)...
 
-        # counter=3 -> slot 3 (F7, 10-20 idx 1, div 235.0): (1007 * 0.25) / 235 = 1.071 -> grade 2
+        # counter=3 -> slot 3 (F7, 10-20 idx 1, div 235.0): (1007 * 0.25) / 235 = 1.0712766 -> continuous score in [2, 3)
+        from emotiv_lsl.emotiv_epoc_x import cq_norm_to_score
+
         expected_cq = [0.0] * 14
-        expected_cq[1] = 2.0
-        self.assertEqual(cq, expected_cq)
+        expected_cq[1] = cq_norm_to_score((1007.0 * 0.25) / 235.0)
+        for a, b in zip(cq, expected_cq):
+            self.assertAlmostEqual(a, b, places=12)
+        ## END for a, b in zip(cq, expected_cq)...
+        self.assertGreater(cq[1], 2.0)
+        self.assertLess(cq[1], 3.0)
 
 
     def test_cq_demux_sticky_and_battery_hold(self):
+        from emotiv_lsl.emotiv_epoc_x import cq_norm_to_score, cq_score_to_norm
+
+        # Verify knot continuity and exact bijection across all regimes
+        for probe_norm in (0.0, 0.05, 0.2, 0.45, 0.7, 1.25, 1.7, 4.85, 12.4):
+            self.assertAlmostEqual(cq_score_to_norm(cq_norm_to_score(probe_norm)), probe_norm, places=12)
+        ## END for probe_norm in (0.0, 0.05, 0.2, 0.45, 0.7, 1.25, 1.7, 4.85, 12.4)...
+        self.assertAlmostEqual(cq_norm_to_score(0.0), 0.0, places=12)
+        self.assertAlmostEqual(cq_norm_to_score(0.2), 1.0, places=12)
+        self.assertAlmostEqual(cq_norm_to_score(0.7), 2.0, places=12)
+        self.assertAlmostEqual(cq_norm_to_score(1.7), 3.0, places=12)
+
         words = [0] * 15
-        # Packet 1: counter=2 -> slot 2 (AF3, 10-20 idx 0, div 226.0), word7=1800 -> grade 4
+        # Packet 1: counter=2 -> slot 2 (AF3, 10-20 idx 0, div 226.0), word7=1800 -> score > 3.0
         words[7] = 1800
         _, cq1 = self.headset.decode_eeg_mode7(_build_mode7_plain(2, 0x10, words))
         expected = [0.0] * 14
-        expected[0] = 4.0
+        expected[0] = cq_norm_to_score((1800.0 * 0.25) / 226.0)
+        self.assertGreater(expected[0], 3.0)
         self.assertEqual(cq1, expected)
 
-        # Packet 2: counter=0 -> slot 0 (F3, 10-20 idx 2, div 212.0), word7=300 -> grade 1; AF3 holds 4
+        # Packet 2: counter=0 -> slot 0 (F3, 10-20 idx 2, div 212.0), word7=300 -> score in [1, 2); AF3 holds
         words[7] = 300
         _, cq2 = self.headset.decode_eeg_mode7(_build_mode7_plain(0, 0x10, words))
-        expected[2] = 1.0
+        expected[2] = cq_norm_to_score((300.0 * 0.25) / 212.0)
+        self.assertGreater(expected[2], 1.0)
+        self.assertLess(expected[2], 2.0)
         self.assertEqual(cq2, expected)
 
         # Packet 3: counter=14 -> slot 14 (outside 0..13), holds previous state
@@ -199,8 +219,10 @@ class TestMode7Decode(unittest.TestCase):
 
 
     def test_encrypted_roundtrip(self):
+        from emotiv_lsl.emotiv_epoc_x import cq_norm_to_score
+
         words = [100 + i * 17 for i in range(15)]
-        words[7] = 0x12AB  # full 16-bit word7 = 4779 -> grade 4 on counter=5 (slot 5 = P7, 10-20 idx 5)
+        words[7] = 0x12AB  # full 16-bit word7 = 4779 -> continuous score on counter=5 (slot 5 = P7, 10-20 idx 5)
         plain = _build_mode7_plain(5, 0x10, words)
         wire = _encrypt_wire(plain, self.key)
         eeg, cq = self.headset.decode_data(wire)
@@ -211,20 +233,23 @@ class TestMode7Decode(unittest.TestCase):
         ## END for a, b in zip(eeg, expected)...
 
         expected_cq = [0.0] * 14
-        expected_cq[5] = 4.0
+        expected_cq[5] = cq_norm_to_score((float(0x12AB) * 0.25) / 239.0)
         self.assertEqual(cq, expected_cq)
 
 
     def test_extract_quality_keymodel8(self):
+        from emotiv_lsl.emotiv_epoc_x import cq_norm_to_score
+
         words = [0] * 15
-        words[7] = 1800  # counter=2 -> slot 2 (AF3, 10-20 idx 0) -> grade 4
+        words[7] = 1800  # counter=2 -> slot 2 (AF3, 10-20 idx 0, div 226.0)
         plain = _build_mode7_plain(2, 0x10, words)
         q = self.headset.extractQualityValues(plain, return_as_array=True)
+        expected_af3 = cq_norm_to_score((1800.0 * 0.25) / 226.0)
         expected_cq = [0.0] * 14
-        expected_cq[0] = 4.0
+        expected_cq[0] = expected_af3
         self.assertEqual(list(q), expected_cq)
         q_dict = self.headset.extractQualityValues(plain, return_as_array=False)
-        self.assertEqual(q_dict["AF3"], 4.0)
+        self.assertAlmostEqual(q_dict["AF3"], expected_af3, places=12)
         self.assertEqual(q_dict["F7"], 0.0)
 
     def test_convertEPOC_PLUS_approx_div78(self):
@@ -439,9 +464,11 @@ class TestWinVmRevEngGroundTruthVectors(unittest.TestCase):
         # Hold battery across non-(eeg_rate-1) counter even when word7 == 0.
         plain_eeg0 = bytes([0, 0x10]) + struct.pack("<15H", *([32000] * 7), 1600, *([32000] * 7))
         _, cq0 = hs.decode_data(encrypt_wire_packet(plain_eeg0, k_usb4, is_v4=True, is_mems=False))
+        from emotiv_lsl.emotiv_epoc_x import cq_norm_to_score
+
         self.assertEqual(hs.battery_percent, 87)
         self.assertEqual(hs.last_marker_hw, 0)
-        self.assertEqual(cq0[2], 4.0)  # slot 0 = F3 -> 10-20 idx 2 -> grade 4
+        self.assertAlmostEqual(cq0[2], cq_norm_to_score((1600.0 * 0.25) / 212.0), places=12)
 
         # 32B V4 USB Motion (20B + 12B zero pad) & 20B V4 BLE Motion (16B AES-256 + 4B XOR 0x14).
         plain_mot20 = bytes([42, 0x20]) + struct.pack(">9h", 4096, -4096, 2048, 0, 8191, 0, 120, -60, 300)

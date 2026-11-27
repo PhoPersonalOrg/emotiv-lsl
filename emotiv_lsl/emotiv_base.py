@@ -177,8 +177,8 @@ class EmotivBase(EasyTimeSyncParsingMixin):
             counter = data[0]
             words = struct.unpack_from("<15H", bytes(data), 2)
             if hasattr(self, "update_cq_from_word7"):
-                grades = self.update_cq_from_word7(counter, words[7])
-                quality_values_dict = dict(zip(self.eeg_channel_names, grades))
+                scores = self.update_cq_from_word7(counter, words[7])
+                quality_values_dict = dict(zip(self.eeg_channel_names, scores))
             else:
                 cq = float(words[7] & 0x7F)
                 quality_values_dict = {name: cq for name in self.eeg_channel_names}

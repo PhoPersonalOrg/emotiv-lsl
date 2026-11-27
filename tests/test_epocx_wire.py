@@ -70,8 +70,10 @@ class TestEncodeDecodeRoundtrip(unittest.TestCase):
             self.assertAlmostEqual(a, expected, places=9)
         ## END for a, b in zip(eeg, uv)....
 
+        from emotiv_lsl.emotiv_epoc_x import cq_norm_to_score
+
         expected_cq = [0.0] * 14
-        expected_cq[1] = 4.0
+        expected_cq[1] = cq_norm_to_score((1800.0 * 0.25) / 235.0)
         self.assertEqual(quality, expected_cq)
 
     def test_motion_roundtrip(self):
@@ -96,17 +98,19 @@ class TestEncodeDecodeRoundtrip(unittest.TestCase):
         self.assertEqual(usb_out, out)
 
 
-    def test_cq_grade_to_word7_roundtrip_all_slots(self):
+    def test_cq_score_to_word7_roundtrip_all_slots(self):
         from emotiv_lsl.emotiv_epoc_x import CQ_SLOT_TO_1020_IDX
+        from emotiv_lsl.epocx_wire import cq_score_to_word7
 
         hs = EmotivEpocX(serial_number=self.serial, enable_electrode_quality_stream=True)
-        for grade in (0.0, 1.0, 2.0, 4.0):
+        for target_score in (0.0, 0.55, 1.35, 2.45, 5.75, 9.20):
             for slot in range(14):
-                w7 = cq_grade_to_word7(grade, slot)
-                grades = hs.update_cq_from_word7(slot, w7)
-                self.assertEqual(grades[CQ_SLOT_TO_1020_IDX[slot]], grade)
+                w7 = cq_score_to_word7(target_score, slot)
+                scores = hs.update_cq_from_word7(slot, w7)
+                # 16-bit integer word7 quantization step is <= ~0.01 score units across all divisors
+                self.assertAlmostEqual(scores[CQ_SLOT_TO_1020_IDX[slot]], target_score, delta=0.015)
             ## END for slot in range(14)...
-        ## END for grade in (0.0, 1.0, 2.0, 4.0)...
+        ## END for target_score in (0.0, 0.55, 1.35, 2.45, 5.75, 9.20)...
 
 
     def test_v4_header_metadata_roundtrip(self):

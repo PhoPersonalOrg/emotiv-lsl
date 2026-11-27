@@ -29,7 +29,7 @@ This report evaluates 2.4 GHz USB HID interoperability (`hid_device.py`, `emotiv
 | C1 | V2 key (`fw<=0x073E`): reverse `"UD..."` ASCII -> Mode-7 perm -> AES-128 + XOR `0x55` | **PASS** | `serial_bytes_hid` + `aes_key_epocx_mode` + `decrypt_packet` |
 | C2 | V4 key (`fw>=0x073F`): SHA-256(`"Vohcha7e"+S8[:4]+"Ut3phaej"+S8[4:8]+f"{fw:04X}"`) + AES-256 + XOR `0x14` | **PASS** | `derive_v4_key` + `EmotivEpocX.decrypt_packet` (32B USB + 20B V4 offline BLE tail) |
 | C3 | Mode-7 EEG word map `[2,3,0,1,4,5,6,8,9,10,13,14,11,12]` + `÷7.8` / `÷1.95` | **PASS** | `EmotivEpocX.decode_eeg_mode7` |
-| C4 | Battery gate `counter == eeg_rate - 1` (`words[7] != 0`); per-slot 16-bit CQ demux `{0,1,2,4}` | **PASS** | `EmotivEpocX.decode_eeg_mode7` + `update_cq_from_word7` + `epocx_wire.cq_grade_to_word7` |
+| C4 | Battery gate `counter == eeg_rate - 1` (`words[7] != 0`); per-slot 16-bit continuous CQ demux (`cq_norm_to_score` + `cq_score_to_word7`) | **PASS** | `EmotivEpocX.decode_eeg_mode7` + `update_cq_from_word7` + `epocx_wire.cq_score_to_word7` + `legacy_xdf_cq.py` |
 | C5 | `"top"` (default) and `"back"` (identity) headband Motion transform | **PASS** | `EmotivEpocX.decode_motion_data` + CLI `--headband-position {top,back}` |
 | C6 | `marker_hw = (plain[1] >> 7) & 1`; EEG counter wrap `mod eeg_rate`, MEMS wrap `mod 128` | **PASS** | `EmotivEpocX.last_marker_hw`, `eeg_counter_drops`, `mems_counter_drops` |
 

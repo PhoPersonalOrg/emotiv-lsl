@@ -59,6 +59,42 @@ def cq_norm_to_grade(norm: float) -> int:
     return 4
 
 
+def cq_norm_to_score(norm: float) -> float:
+    """Continuous, threshold-aligned CQ score from calibrated Cortex ratio `norm >= 0`.
+
+    Maps Cortex physical impedance breakpoints `(0.0, 0.2, 0.7, 1.7)` piecewise-linearly onto
+    `(0.0, 1.0, 2.0, 3.0)` with unit slope above `1.7` (`3.0 + (norm - 1.7)`), preserving full
+    analog impedance resolution while aligning with `pyPhoTimeline` / `PhoPyMNEHelper` cutoffs
+    (`<= 0` No Signal, `(0, 1]` Bad, `(1, 2]` Low/Mask, `[2, 3)` Fair, `>= 3` Good).
+    """
+    val = float(norm)
+    if val <= 0.0:
+        return 0.0
+    t0, t1, t2 = CQ_GRADE_THRESHOLDS
+    if val < t0:
+        return val / t0
+    if val < t1:
+        return 1.0 + (val - t0) / (t1 - t0)
+    if val < t2:
+        return 2.0 + (val - t1) / (t2 - t1)
+    return 3.0 + (val - t2)
+
+
+def cq_score_to_norm(score: float) -> float:
+    """Exact inverse of `cq_norm_to_score` (continuous score -> calibrated Cortex ratio `norm >= 0`)."""
+    s = float(score)
+    if s <= 0.0:
+        return 0.0
+    t0, t1, t2 = CQ_GRADE_THRESHOLDS
+    if s < 1.0:
+        return s * t0
+    if s < 2.0:
+        return t0 + (s - 1.0) * (t1 - t0)
+    if s < 3.0:
+        return t1 + (s - 2.0) * (t2 - t1)
+    return t2 + (s - 3.0)
+
+
 def aes_key_epocx_mode(s4: bytes) -> bytes:
     """Version 2 (fw <= 0x073E) Mode-7 AES-128 key from first four prepared serial bytes."""
     if len(s4) < 4:
@@ -153,7 +189,7 @@ class EmotivEpocX(EmotivBase):
     _last_eeg_counter: Optional[int] = field(default=None, init=False, repr=False)
     _last_mems_counter: Optional[int] = field(default=None, init=False, repr=False)
     _explicit_cipher_provided: bool = field(default=False, init=False, repr=False)
-    _cq_grades: List[float] = field(factory=lambda: [0.0] * 14, init=False, repr=False)
+    _cq_scores: List[float] = field(factory=lambda: [0.0] * 14, init=False, repr=False)
 
 
     def __attrs_post_init__(self):
@@ -390,7 +426,7 @@ class EmotivEpocX(EmotivBase):
 
 
     def get_lsl_outlet_electrode_quality_stream_info(self) -> StreamInfo:
-        """Per-electrode Contact Quality (CQ) stream in 10-20 channel order (grades {0, 1, 2, 4})."""
+        """Continuous per-electrode Contact Quality (CQ) stream in 10-20 channel order."""
         ch_names = self.eeg_quality_channel_names
         n_channels = len(ch_names)
 
@@ -416,7 +452,7 @@ class EmotivEpocX(EmotivBase):
         cap.append_child_value("labelscheme", "10-20")
         info.desc().append_child_value(
             "cq_note",
-            "Mode-7 per-electrode CQ demux: slot = counter % (eeg_rate // 2), norm = (word7 * 0.25) / scale[slot], grades {0,1,2,4}",
+            "Mode-7 continuous per-electrode CQ demux: slot = counter % (eeg_rate // 2), norm = (word7 * 0.25) / scale[slot], continuous score (0->0, 0.2->1, 0.7->2, 1.7->3, >1.7->3+(norm-1.7))",
         )
 
         info = self._append_usb_device_desc(info)
@@ -425,13 +461,13 @@ class EmotivEpocX(EmotivBase):
 
 
     def update_cq_from_word7(self, counter: int, word7: int) -> List[float]:
-        """Demux Mode-7 16-bit word7 by packet counter into sticky 10-20 CQ grades {0, 1, 2, 4}."""
+        """Demux Mode-7 16-bit word7 by packet counter into sticky 10-20 continuous CQ scores."""
         half_rate = max(1, int(self.eeg_rate) // 2)
         slot = (int(counter) & 0xFF) % half_rate
         if 0 <= slot < 14:
             norm = (float(int(word7) & 0xFFFF) * 0.25) / CQ_SLOT_SCALE_DIVISORS[slot]
-            self._cq_grades[CQ_SLOT_TO_1020_IDX[slot]] = float(cq_norm_to_grade(norm))
-        return list(self._cq_grades)
+            self._cq_scores[CQ_SLOT_TO_1020_IDX[slot]] = cq_norm_to_score(norm)
+        return list(self._cq_scores)
 
 
     def decrypt_packet(self, data, *, is_mems: bool = False) -> bytes:

@@ -417,8 +417,8 @@ def build_synthetic_wire(n_packets: int = 16, *, serial: str = FIXTURE_SERIAL, c
 
 
 def expected_synth_cq_matrix(n_packets: int = 16, *, cq: Optional[int] = None, eeg_rate: int = 128) -> np.ndarray:
-    """Compute expected sticky 14-ch 10-20 CQ grades {0, 1, 2, 4} for build_synthetic_wire."""
-    from emotiv_lsl.emotiv_epoc_x import CQ_SLOT_SCALE_DIVISORS, CQ_SLOT_TO_1020_IDX, cq_norm_to_grade
+    """Compute expected sticky 14-ch 10-20 continuous CQ scores for build_synthetic_wire."""
+    from emotiv_lsl.emotiv_epoc_x import CQ_SLOT_SCALE_DIVISORS, CQ_SLOT_TO_1020_IDX, cq_norm_to_score
 
     state = [0.0] * 14
     rows: List[List[float]] = []
@@ -429,7 +429,7 @@ def expected_synth_cq_matrix(n_packets: int = 16, *, cq: Optional[int] = None, e
         slot = counter % half_rate
         if 0 <= slot < 14:
             norm = (float(word7 & 0xFFFF) * 0.25) / CQ_SLOT_SCALE_DIVISORS[slot]
-            state[CQ_SLOT_TO_1020_IDX[slot]] = float(cq_norm_to_grade(norm))
+            state[CQ_SLOT_TO_1020_IDX[slot]] = float(cq_norm_to_score(norm))
         rows.append(list(state))
     ## END for i in range(n_packets)...
 

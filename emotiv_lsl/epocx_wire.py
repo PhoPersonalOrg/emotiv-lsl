@@ -56,6 +56,7 @@ from emotiv_lsl.emotiv_epoc_x import (
     V2_XOR_BYTE,
     V4_XOR_BYTE,
     aes_key_epocx_mode,
+    cq_score_to_norm,
     derive_v4_key,
     serial_bytes_ble_hex,
     serial_bytes_hid,
@@ -268,6 +269,17 @@ def encode_usb_motion_wire(counter: int, motion10: Sequence[float], key: bytes, 
     plain20 = encode_motion_wire(counter, motion10, headband_position=headband_position)
     plain32 = plain20 + (b"\x00" * 12)
     return encrypt_eeg_plain(plain32, key)
+
+
+def cq_score_to_word7(score: float, slot: int) -> int:
+    """Inverse-map a continuous threshold-aligned CQ score on `slot` (0..13) to raw 16-bit `words[7]`."""
+    if not (0 <= slot < 14):
+        return 0
+    norm = cq_score_to_norm(float(score))
+    if norm <= 0.0:
+        return 0
+    raw = int(round((norm * CQ_SLOT_SCALE_DIVISORS[slot]) / 0.25))
+    return max(0, min(0xFFFF, raw))
 
 
 def cq_grade_to_word7(grade: float, slot: int) -> int:
@@ -658,7 +670,7 @@ def _nearest_cq(quality_ts: Sequence[float], quality_data, t: float, *, counter:
     sample = quality_data[idx]
     try:
         ch_idx = CQ_SLOT_TO_1020_IDX[slot] if len(sample) >= 14 else 0
-        return cq_grade_to_word7(float(sample[ch_idx]), slot)
+        return cq_score_to_word7(float(sample[ch_idx]), slot)
     except Exception:
         return 0
 
@@ -666,9 +678,11 @@ def _nearest_cq(quality_ts: Sequence[float], quality_data, t: float, *, counter:
 def xdf_to_wire(xdf_path: Union[str, Path], *, serial: str = DEFAULT_SERIAL, serial_source: str = "hid", adc_div: float = ADC_DIV_16BIT) -> WireFile:
     """Load an Epoc X LabRecorder XDF and build timed wire packets.
 
-    Synthetic (re-encrypts decoded µV and 32B USB motion). Prefer live ``--record`` for exact HID bytes.
+    Synthetic (re-encrypts decoded µV and 32B USB motion). Automatically reconstructs
+    per-electrode CQ if the input XDF used the legacy nibble-scraped `Epoc X eQuality` format.
     """
     import pyxdf
+    from emotiv_lsl.legacy_xdf_cq import reconstruct_legacy_equality_array
 
     streams, _header = pyxdf.load_xdf(str(xdf_path))
     eeg = _stream_by_name(streams, EEG_STREAM_NAME)
@@ -680,9 +694,14 @@ def xdf_to_wire(xdf_path: Union[str, Path], *, serial: str = DEFAULT_SERIAL, ser
     if eeg_data.ndim != 2 or eeg_data.shape[1] < 14:
         raise ValueError(f"EEG stream unexpected shape {getattr(eeg_data, 'shape', None)}")
 
+    eeg_hz = float((eeg.get("info") or {}).get("nominal_srate", [128])[0] or 128)
+    eeg_rate_int = 256 if int(round(eeg_hz)) >= 256 else 128
+
     quality = _stream_by_name(streams, QUALITY_STREAM_NAME)
     q_ts = quality["time_stamps"] if quality is not None else None
     q_data = quality["time_series"] if quality is not None else None
+    if q_data is not None and getattr(q_data, "ndim", 0) == 2 and q_data.shape[1] >= 14:
+        q_data = reconstruct_legacy_equality_array(q_data[:, :14], eeg_rate=eeg_rate_int).cq_scores
 
     motion = _stream_by_name(streams, MOTION_STREAM_NAME)
     m_ts = motion["time_stamps"] if motion is not None else None
@@ -692,8 +711,6 @@ def xdf_to_wire(xdf_path: Union[str, Path], *, serial: str = DEFAULT_SERIAL, ser
     if m_ts is not None and len(m_ts) > 0:
         t0 = min(t0, float(m_ts[0]))
 
-    eeg_hz = float((eeg.get("info") or {}).get("nominal_srate", [128])[0] or 128)
-    eeg_rate_int = 256 if int(round(eeg_hz)) >= 256 else 128
     mems_hz = float((motion.get("info") or {}).get("nominal_srate", [32])[0] or 32) if motion is not None else None
 
     header = WireHeader(

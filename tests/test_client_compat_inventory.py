@@ -134,7 +134,7 @@ class TestFlutterClientInventory(unittest.TestCase):
         self.assertEqual(FLUTTER_LSL_MOTION_NAME, MOTION_STREAM_NAME)
 
     def test_equality_lsl_outlet(self):
-        """Python publishes per-electrode Mode-7 CQ demux grades {0,1,2,4}; Flutter shares stream name."""
+        """Python publishes continuous per-electrode Mode-7 CQ demux scores; Flutter shares stream name."""
         self.assertTrue(FLUTTER_HAS_EQUALITY_LSL)
         self.assertEqual(FLUTTER_LSL_QUALITY_NAME, QUALITY_STREAM_NAME)
         hs = make_flutter_headset_for_info(enable_quality=True)
