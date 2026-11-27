@@ -22,10 +22,10 @@ from ctypes import (
 )
 from typing import Any, Optional, Union
 
-# Emotiv Epoc X EEG interface (usage_page=0xFFFF, usage=2):
-# 32-byte input report + 6-byte feature report, no report IDs.
+# Emotiv Epoc X EEG interface MI_01 (usage_page=0xFFFF, usage=2):
+# 32-byte input report + 17-byte feature report payload (FeatureReportByteLength=18 with Report ID 0x00).
 DEFAULT_EPOCX_REPORT_DESCRIPTOR = bytes.fromhex(
-    "06ffff0902a1000903750895201581257f8102090475089506b102c0"
+    "06ffff0902a1000903750895201581257f8102090475089511b102c0"
 )
 
 DEFAULT_VID = 0x1234

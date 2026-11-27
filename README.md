@@ -4,11 +4,11 @@
 ## Description
 LSL (Lab Streaming Layer) server for the Emotiv EPOC X headset, based on the original [CyKit] and [emotiv] (https://github.com/vtr0n/emotiv-lsl) project. This project allows acquiring, reading, and exporting raw data from the headset.
 
-### Epoc X decode notes
-- EEG path is aligned to EmotivPRO Android **Mode 7** (EpocPlus LE16 + `getRawEegId` remap + ADC ÷7.8). Transport remains **USB HID**.
-- Crypto uses Version2 **EpocXMode** (XOR `0x55` → AES-128-ECB). Firmware V4 / `findKey` is unsupported.
-- Motion LSL defaults off; a 20-byte Android Q/ACC/MAG decoder is present for when HID/BLE exposes that report.
-- Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`, `python -m tests.test_flutter_raw_csv`, `python -m tests.test_client_compat`, and `python -m tests.test_client_compat_flutter`
+### Epoc X decode notes (2.4 GHz USB HID-first)
+- **Transport**: 2.4 GHz USB HID (`0x1234:0xED02` and `0x21A1:0x0001`, composite `MI_01`). Queries Feature Report `0x00` on open for `dongle_fw`, `headset_fw`, paired `headset_serial` (`EPOCX-<HEX>`), `eeg_rate` (`128/256 Hz`), `eeg_bits` (`14/16`), and `mems_rate` (`0/32/64/128 Hz`, default `32 Hz`). Optional 33-byte Output Report `0x00` reconfigures rates (`--eeg-rate`, `--eeg-bits`, `--mems-rate`).
+- **Crypto**: Supports both Version 2 (`fw <= 0x073E`, `"UD..."` dongle reverse, `XOR 0x55`, AES-128-ECB) and Version 4 (`fw >= 0x073F`, paired `headset_serial[:8]` SHA-256 schedule, `XOR 0x14`, AES-256-ECB).
+- **Packet demux**: Every 32-byte USB HID input report is decrypted and demuxed on `plain[1] & 0x7F`: `0x10` -> Mode-7 EEG (`14` ch uV + per-slot CQ + `counter == eeg_rate - 1` battery latch + `marker_hw`), `0x20` -> 20-byte Motion (`Q0..Q3`, `AccX..Z`, `MagX..Z`, `--headband-position {top,back}`). Motion LSL is enabled by default (`--no-motion` to disable).
+- Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`, `python -m tests.test_flutter_raw_csv`, `python -m tests.test_client_compat`, `python -m tests.test_client_compat_flutter`, and `python -m tests.test_client_compat_inventory`
 
 ### Flutter session `raw.csv` → offline decode / wire replay
 

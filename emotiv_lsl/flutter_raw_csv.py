@@ -65,12 +65,17 @@ class SessionMeta:
     bt_key_hex: str
     serial_source: str = "ble_hex"
     eeg_resolution_bits: int = 16
+    eeg_rate_hz: int = 128
+    mems_rate_hz: int = 32
+    fw_version: Optional[int] = None
     device_name: str = ""
     raw: dict = field(default_factory=dict)
+
 
     @property
     def adc_div(self) -> float:
         return ADC_DIV_16BIT if self.eeg_resolution_bits >= 16 else ADC_DIV_14BIT
+
 
     @property
     def eeg_resolution_bits_hex(self) -> int:
@@ -93,14 +98,31 @@ class DecodeResult:
     failed: int = 0
 
 
+def _parse_optional_fw(raw_fw) -> Optional[int]:
+    if raw_fw is None or raw_fw == "":
+        return None
+    if isinstance(raw_fw, int):
+        return raw_fw
+    s = str(raw_fw).strip()
+    if not s:
+        return None
+    return int(s, 0) if s.lower().startswith("0x") else int(s, 16 if any(c in s.upper() for c in "ABCDEF") else 10)
+
+
 def load_session_meta(session_dir: Union[str, Path]) -> SessionMeta:
     path = Path(session_dir) / "session.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     bits = int(data.get("eegResolutionBits", 16))
+    eeg_hz = int(data.get("eegRateHz", 128) or 128)
+    mems_hz = int(data.get("motionRateHz", 32) or 32)
+    fw_raw = data.get("fwVersion", data.get("headsetFw"))
     return SessionMeta(
         bt_key_hex=str(data.get("btKeyHex", "")).strip().upper(),
         serial_source=str(data.get("serialSource", "ble_hex")),
         eeg_resolution_bits=bits,
+        eeg_rate_hz=eeg_hz,
+        mems_rate_hz=mems_hz,
+        fw_version=_parse_optional_fw(fw_raw),
         device_name=str(data.get("deviceName", "")),
         raw=data,
     )
@@ -152,8 +174,12 @@ def iter_raw_rows(raw_csv: Union[str, Path]) -> Iterator[RawRow]:
 
 
 def classify_payload(payload: bytes, kind_hint: str = "") -> str:
-    """Return ``eeg``, ``motion``, or ``unknown`` from length (kind is advisory)."""
+    """Return ``eeg``, ``motion``, ``superframe`` (84B BLE 2xEEG+Motion), or ``unknown``."""
     n = len(payload)
+    if n > 0 and n % 84 == 0:
+        return "superframe"
+    if n == 52:
+        return "superframe"
     if n == 20:
         return "motion"
     if n >= 32 and n % 32 == 0:
@@ -171,7 +197,21 @@ def classify_payload(payload: bytes, kind_hint: str = "") -> str:
 
 
 def split_packages(payload: bytes, modality: str) -> List[bytes]:
+    if modality == "superframe":
+        n = len(payload)
+        if n == 52:
+            return [payload[0:32], payload[32:52]]
+        out: List[bytes] = []
+        for off in range(0, (n // 84) * 84, 84):
+            out.append(payload[off : off + 32])
+            out.append(payload[off + 32 : off + 64])
+            out.append(payload[off + 64 : off + 84])
+        ## END for off in range(0, (n // 84) * 84, 84)...
+
+        return out
     if modality == "eeg":
+        if len(payload) == 84:
+            return [payload[0:32], payload[32:64], payload[64:84]]
         stride = 32
     elif modality == "motion":
         stride = 20
@@ -186,10 +226,15 @@ def split_packages(payload: bytes, modality: str) -> List[bytes]:
 def make_headset(meta: SessionMeta) -> EmotivEpocX:
     if not meta.bt_key_hex:
         raise ValueError("session.json missing btKeyHex")
+    hs_hex = meta.bt_key_hex[:8] if len(meta.bt_key_hex) >= 8 else None
     return EmotivEpocX(
         serial_number=meta.bt_key_hex,
         serial_source=meta.serial_source or "ble_hex",
+        headset_serial=hs_hex,
+        headset_fw=meta.fw_version,
         eeg_resolution_bits=meta.eeg_resolution_bits_hex,
+        eeg_rate=meta.eeg_rate_hz,
+        mems_rate=meta.mems_rate_hz,
         enable_motion_data=True,
         enable_electrode_quality_stream=False,
     )
@@ -253,15 +298,16 @@ def write_offline_csvs(
     return eeg_path, motion_path
 
 
-def rows_to_wire(
-    rows: Sequence[RawRow],
-    meta: SessionMeta,
-) -> WireFile:
+def rows_to_wire(rows: Sequence[RawRow], meta: SessionMeta) -> WireFile:
+    hs_hex = meta.bt_key_hex[:8] if len(meta.bt_key_hex) >= 8 else None
     header = WireHeader(
         serial=meta.bt_key_hex,
         serial_source=meta.serial_source or "ble_hex",
         adc_div=meta.adc_div,
-        eeg_hz=128.0,
+        eeg_hz=float(meta.eeg_rate_hz),
+        mems_hz=float(meta.mems_rate_hz),
+        headset_serial=hs_hex,
+        headset_fw=meta.fw_version,
     )
     if not rows:
         return WireFile(header=header, packets=[])

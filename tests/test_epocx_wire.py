@@ -34,8 +34,10 @@ from emotiv_lsl.epocx_wire import (
     WirePacket,
     WireReplaySource,
     WireSessionRecorder,
+    cq_grade_to_word7,
     encode_eeg_wire,
     encode_motion_wire,
+    encode_usb_motion_wire,
     read_wire_file,
     write_wire_file,
 )
@@ -84,7 +86,66 @@ class TestEncodeDecodeRoundtrip(unittest.TestCase):
         # Skip Q0 (index 0) — reconstructed from vector part.
         for i in range(1, 10):
             self.assertAlmostEqual(out[i], motion[i], places=2)
-        ## END for i in range(1, 10)....
+        ## END for i in range(1, 10)...
+
+        # 32-byte encrypted USB Motion wire report must round-trip identically.
+        usb_buf = encode_usb_motion_wire(7, motion, self.key)
+        self.assertEqual(len(usb_buf), 32)
+        usb_out, usb_cq = self.headset.decode_data(usb_buf)
+        self.assertIsNone(usb_cq)
+        self.assertEqual(usb_out, out)
+
+
+    def test_cq_grade_to_word7_roundtrip_all_slots(self):
+        from emotiv_lsl.emotiv_epoc_x import CQ_SLOT_TO_1020_IDX
+
+        hs = EmotivEpocX(serial_number=self.serial, enable_electrode_quality_stream=True)
+        for grade in (0.0, 1.0, 2.0, 4.0):
+            for slot in range(14):
+                w7 = cq_grade_to_word7(grade, slot)
+                grades = hs.update_cq_from_word7(slot, w7)
+                self.assertEqual(grades[CQ_SLOT_TO_1020_IDX[slot]], grade)
+            ## END for slot in range(14)...
+        ## END for grade in (0.0, 1.0, 2.0, 4.0)...
+
+
+    def test_v4_header_metadata_roundtrip(self):
+        from emotiv_lsl.emotiv_epoc_x import derive_v4_key
+
+        v4_key = derive_v4_key("E50202E9", 0x0752)
+        uv = [200.0 + i * 3.0 for i in range(14)]
+        p_eeg = encode_eeg_wire(0, uv, v4_key)
+        p_mot = encode_usb_motion_wire(0, [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0], v4_key)
+        hdr = WireHeader(
+            serial="UD20240731007676",
+            serial_source="hid",
+            eeg_hz=256.0,
+            mems_hz=64.0,
+            headset_serial="E50202E9",
+            headset_fw=0x0752,
+            dongle_fw=0x06FF,
+            eeg_bits=16,
+            mems_bits=16,
+        )
+        wire = WireFile(header=hdr, packets=[WirePacket(rel_ns=0, payload=p_eeg), WirePacket(rel_ns=1000, payload=p_mot)])
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "v4.epocxwire"
+            write_wire_file(path, wire)
+            loaded = read_wire_file(path)
+            self.assertEqual(loaded.header.headset_serial, "E50202E9")
+            self.assertEqual(loaded.header.headset_fw, 0x0752)
+            self.assertEqual(loaded.header.mems_hz, 64.0)
+            src = WireReplaySource(loaded, speed=0.0)
+            hs = EmotivEpocX(enable_motion_data=True, enable_electrode_quality_stream=True, replay_source=src)
+            src.apply_serial_to(hs)
+            self.assertTrue(hs.is_v4)
+            self.assertEqual(hs.eeg_rate, 256)
+            self.assertEqual(hs.mems_rate, 64)
+            eeg, _ = hs.decode_data(src.read(32))
+            mot, _ = hs.decode_data(src.read(32))
+            self.assertEqual(len(eeg), 14)
+            self.assertEqual(len(mot), 10)
+            self.assertAlmostEqual(mot[4], 1.0, places=3)
 
     def test_wire_file_io_and_replay_source(self):
         uv = [50.0 + i for i in range(14)]

@@ -67,16 +67,20 @@ class TestManufacturerVersionInventory(unittest.TestCase):
 
 class TestMotionDefaultInventory(unittest.TestCase):
     def test_motion_off_by_default_in_info_builder(self):
-        """main.py / C++ main both default enable_motion_data=False."""
+        """EmotivBase field defaults enable_motion_data=False; main.py enables USB motion by default."""
         hs = make_headset_for_info(enable_motion=False)
         self.assertFalse(hs.enable_motion_data)
 
     def test_motion_layout_when_enabled(self):
+        from config import MOTION_SRATE
+
         hs = make_headset_for_info(enable_motion=True)
         snap = stream_info_snapshot(hs.get_lsl_outlet_motion_stream_info())
         self.assertEqual(snap["name"], MOTION_STREAM_NAME)
         self.assertEqual(snap["type"], "SIGNAL")
         self.assertEqual(snap["channel_count"], 10)
+        self.assertEqual(snap["nominal_srate"], float(MOTION_SRATE))
+        self.assertEqual(float(MOTION_SRATE), 32.0)
         self.assertEqual(
             snap["channel_labels"],
             [

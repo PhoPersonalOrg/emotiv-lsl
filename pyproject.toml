@@ -1,6 +1,6 @@
 [project]
 name = "emotiv-lsl"
-version = "0.1.8"
+version = "0.2.0"
 description = "LSL server for Emotiv EPOC X, much more modern than others (~2025) "
 readme = "README.md"
 requires-python = ">=3.9.13"

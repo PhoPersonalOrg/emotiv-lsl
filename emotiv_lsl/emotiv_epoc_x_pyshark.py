@@ -33,7 +33,9 @@ class EmotivEpocXPyShark(EmotivEpocX):
 
             if self.validate_data(data):
                 data = bytearray.fromhex(data)
-                decoded = self.decode_data(data)
-                outlet.push_sample(decoded)
+                decoded, _cq = self.decode_data(data)
+                if decoded is not None and len(decoded) == 14:
+                    outlet.push_sample(decoded)
+        ## END for packet in self.capture.sniff_continuously()...
 
 

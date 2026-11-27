@@ -360,11 +360,7 @@ def install_console_minimize_hook():
     else:
         _old_console_wndproc = user32.SetWindowLongW(hwnd, GWLP_WNDPROC, _console_wndproc)
 
-def run_emotiv_loop(
-    replay_path: Path = None,
-    replay_speed: float = 1.0,
-    record_path: Path = None,
-):
+def run_emotiv_loop(replay_path: Path = None, replay_speed: float = 1.0, record_path: Path = None, *, disable_motion: bool = False, headband_position: str = "top", target_eeg_rate: int = None, target_eeg_bits: int = None, target_mems_rate: int = None):
     # Configure logging for debugging data packets
     logging.basicConfig(
         level=logging.DEBUG,
@@ -372,13 +368,12 @@ def run_emotiv_loop(
     )
 
     enable_electrode_quality_stream: bool = True
-    # Motion LSL stays off until a real 20-byte HID/BLE motion report is confirmed.
-    # CyKit data[1]==32 gyro fiction removed; Android Q/ACC/MAG decoder is ready.
-    enable_motion_data: bool = False
+    # Over 2.4 GHz USB HID, both EEG (0x10) and Motion (0x20) arrive as 32-byte encrypted reports.
+    enable_motion_data: bool = not disable_motion
 
     if is_windows:
-        print(f'platform is_windows, enabling quality stream (motion still gated)...')
-        enable_electrode_quality_stream: bool = True
+        print(f"platform is_windows, enabling quality{' + motion' if enable_motion_data else ''} stream...")
+        enable_electrode_quality_stream = True
 
     replay_source = None
     serial_kwargs = {}
@@ -392,6 +387,10 @@ def run_emotiv_loop(
     emotiv_epoc_x = EmotivEpocX(
         enable_motion_data=enable_motion_data,
         enable_electrode_quality_stream=enable_electrode_quality_stream,
+        headband_position=headband_position,
+        target_eeg_rate=target_eeg_rate,
+        target_eeg_bits=target_eeg_bits,
+        target_mems_rate=target_mems_rate,
         on_connection_change=on_connection_change,
         replay_source=replay_source,
         replay_speed=replay_speed,
@@ -469,7 +468,7 @@ def install_console_quit_handlers() -> None:
     ctypes.windll.kernel32.SetConsoleCtrlHandler(_console_ctrl_handler, True)
 
 def _parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Emotiv Epoc X LSL server")
+    p = argparse.ArgumentParser(description="Emotiv Epoc X 2.4 GHz USB HID LSL server")
     p.add_argument(
         "--replay",
         type=Path,
@@ -488,11 +487,52 @@ def _parse_args(argv=None):
         default=None,
         help="Record exact HID session (or replay stream) to .epocxwire v2",
     )
+    p.add_argument(
+        "--no-motion",
+        action="store_true",
+        help="Disable the Epoc X Motion LSL outlet",
+    )
+    p.add_argument(
+        "--headband-position",
+        choices=("top", "back"),
+        default="top",
+        help="Headband IMU mounting orientation ('top' default or 'back' rear-of-skull)",
+    )
+    p.add_argument(
+        "--eeg-rate",
+        type=int,
+        choices=(128, 256),
+        default=None,
+        help="Optional USB HID Output Report 0x00 EEG sample rate (128 or 256 Hz)",
+    )
+    p.add_argument(
+        "--eeg-bits",
+        type=int,
+        choices=(14, 16),
+        default=None,
+        help="Optional USB HID Output Report 0x00 EEG resolution (14 or 16 bits)",
+    )
+    p.add_argument(
+        "--mems-rate",
+        type=int,
+        choices=(0, 32, 64, 128),
+        default=None,
+        help="Optional USB HID Output Report 0x00 MEMS sample rate (0, 32, 64, or 128 Hz)",
+    )
     return p.parse_args(argv)
 
 
 if __name__ == "__main__":
+    from functools import partial
+
     args = _parse_args()
+    loop_kwargs = dict(
+        disable_motion=args.no_motion,
+        headband_position=args.headband_position,
+        target_eeg_rate=args.eeg_rate,
+        target_eeg_bits=args.eeg_bits,
+        target_mems_rate=args.mems_rate,
+    )
 
     # Replay and/or record: foreground decode/LSL loop (no tray / single-instance lock).
     if args.replay is not None or args.record is not None:
@@ -502,6 +542,7 @@ if __name__ == "__main__":
                 replay_path=args.replay,
                 replay_speed=args.replay_speed,
                 record_path=args.record,
+                **loop_kwargs,
             )
         except KeyboardInterrupt:
             # main_loop already closes the recorder in finally; this avoids a traceback
@@ -525,7 +566,7 @@ if __name__ == "__main__":
     start_flash_thread()
 
     # Start Emotiv in a background thread so the main thread can run the system tray
-    emotiv_thread = threading.Thread(target=run_emotiv_loop, daemon=True)
+    emotiv_thread = threading.Thread(target=partial(run_emotiv_loop, **loop_kwargs), daemon=True)
     emotiv_thread.start()
 
     # Start the tray icon loop (blocks the main thread)

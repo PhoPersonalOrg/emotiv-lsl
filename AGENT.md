@@ -23,12 +23,13 @@
 - **Encryption**: AES decryption using device serial-based crypto keys
 - **Dependencies**: Python 3.8+, hidapi, pycryptodome, pylsl, mne, matplotlib
 
-## Epoc X decode (Android-aligned)
-- EEG decode mirrors EmotivPRO Android Mode 7 (EpocPlus LE16 + `getRawEegId` remap + ADC ÷7.8).
-- Crypto: Version2 EpocXMode key schedule; XOR `0x55` → AES-128-ECB. V4/`findKey` unsupported.
-- Transport remains USB HID only (no BLE GATT stack here). BLE checklist lives in the reverse-engineer protocol memory (`epocx-ble-protocol.md`).
-- Motion: Android 20 B BE Q/ACC/MAG decoder exists; LSL motion defaults off until a real 20 B HID report is confirmed.
-- Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`, `python -m tests.test_client_compat`, `python -m tests.test_client_compat_flutter`
+## Epoc X decode (2.4 GHz USB HID-first)
+- Transport is **2.4 GHz USB HID** (`0x1234:0xED02` and `0x21A1:0x0001`, composite `MI_01`: `(usage_page & 0xFF00) == 0xFF00`, `usage == 2`).
+- Queries **USB HID Feature Report `0x00`** on open to discover `dongle_fw`, `headset_fw`, paired `headset_serial` (`EPOCX-<HEX>`), `eeg_rate` (`128/256 Hz`), `eeg_bits` (`14/16`), and `mems_rate` (`0/32/64/128 Hz`, default `32 Hz`). Optional **33-byte Output Report `0x00`** (`00 66 BB 20 12 <CFG>` + `0x88 0x12` ACK) switches sample rates (`--eeg-rate`, `--eeg-bits`, `--mems-rate`).
+- Crypto supports both **Version 2** (`fw <= 0x073E`: `"UD..."` dongle reverse, `XOR 0x55`, AES-128-ECB) and **Version 4** (`fw >= 0x073F`: paired `headset_serial[:8]` SHA-256 schedule, `XOR 0x14`, AES-256-ECB).
+- Every 32-byte USB HID input report is decrypted (`is_mems=False`) and demuxed on `plain[1] & 0x7F`: `0x10` -> Mode-7 EEG (`14` ch uV + per-electrode CQ demux + `counter == eeg_rate - 1` battery latch + `marker_hw`), `0x20` -> 20-byte Motion (`Q0..Q3`, `AccX..Z`, `MagX..Z`, `"top"` or `"back"` headband orientation). Motion LSL is enabled by default (`--no-motion` to disable).
+- Isolated offline replay compatibility: `emotiv_lsl/flutter_raw_csv.py` (including 64B and 84B BLE `81072f41` super-frame splitting) and `serial_source="ble_hex"` remain available strictly for offline `.epocxwire` / CSV decoding.
+- Offline checks: `python -m tests.test_epoc_x_decode`, `python -m tests.test_epocx_wire`, `python -m tests.test_flutter_raw_csv`, `python -m tests.test_client_compat`, `python -m tests.test_client_compat_flutter`, `python -m tests.test_client_compat_inventory`
 - Exact HID capture: `python main.py --record session.epocxwire` then `python main.py --replay session.epocxwire`. Format is EPOCXWIRE/2 (REPORT/EMPTY/ERROR/OPEN/CLOSE); v1 still readable. XDF→wire is synthetic; prefer live `--record` for gold fixtures.
 - Replay (synthetic): `python scripts/xdf_to_epocx_wire.py in.xdf -o out.epocxwire` then `python main.py --replay out.epocxwire` (or pass `.xdf` directly). Same `.epocxwire` works with `emotiv-lsl-cpp --replay` (v1; v2 C++ support later — compare script auto-exports v1).
 - Python vs C++ LSL parity (suite): `python -m tests.test_client_compat` — hard EEG/CQ sample asserts; optional C++ subprocess when binary present. Flutter session path: `python -m tests.test_client_compat_flutter`. Inventory layer: `python -m tests.test_client_compat_inventory`.

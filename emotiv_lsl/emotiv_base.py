@@ -81,6 +81,11 @@ class EmotivBase(EasyTimeSyncParsingMixin):
         from emotiv_lsl.hid_device import find_emotiv_hid_device
 
         return find_emotiv_hid_device()
+
+
+    def on_hid_device_opened(self, hid_device: Any, device: Dict[str, Any]) -> None:
+        """Subclass hook invoked immediately after opening a live USB HID handle."""
+        pass
     
 
 
@@ -205,16 +210,9 @@ class EmotivBase(EasyTimeSyncParsingMixin):
             )
 
     def main_loop(self):
-        # Create EEG outlet
-        eeg_outlet = None 
-
-        # Create motion outlet if the device supports it
+        # Outlets are created lazily once live HID / replay metadata is finalized.
+        eeg_outlet = None
         motion_outlet = None
-        if self.has_motion_data and self.enable_motion_data:
-            motion_outlet = StreamOutlet(self.get_lsl_outlet_motion_stream_info())
-            print(f'Setup motion outlet')
-            
-        # Create motion outlet if the device supports it
         raw_packet_outlet = None
         if self.is_reverse_engineer_mode:
             raw_packet_outlet = StreamOutlet(self.get_lsl_outlet_raw_debugging_stream_info())
@@ -254,6 +252,7 @@ class EmotivBase(EasyTimeSyncParsingMixin):
             ## Get the device info
             device = self.get_hid_device()
             hid_device = open_emotiv_hid_device(device)
+            self.on_hid_device_opened(hid_device, device)
             if self.is_reverse_engineer_mode:
                 logger.debug(f'hid_device: {hid_device}\n\twith path: {device["path"]}\n')
 
@@ -265,6 +264,13 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                     device,
                     serial_source=getattr(self, "serial_source", "hid") or "hid",
                     adc_div=float(getattr(self, "adc_div", 7.8)),
+                    eeg_hz=float(getattr(self, "eeg_rate", 128)),
+                    mems_hz=float(getattr(self, "mems_rate", 32)),
+                    headset_serial=getattr(self, "headset_serial", None),
+                    headset_fw=getattr(self, "headset_fw", None),
+                    dongle_fw=getattr(self, "dongle_fw", None),
+                    eeg_bits=16 if float(getattr(self, "adc_div", 7.8)) > 4.0 else 14,
+                    mems_bits=getattr(self, "mems_bits", None),
                     read_size=self.READ_SIZE,
                     read_timeout_ms=self.hid_read_timeout_ms,
                     report_descriptor=desc_hex,
@@ -282,6 +288,10 @@ class EmotivBase(EasyTimeSyncParsingMixin):
 
             elif recorder is not None and getattr(recorder, "_f", None) is None:
                 recorder.open()
+
+        if self.has_motion_data and self.enable_motion_data and motion_outlet is None:
+            motion_outlet = StreamOutlet(self.get_lsl_outlet_motion_stream_info())
+            print(f'Setup motion outlet')
 
         self.wire_recorder = recorder
 

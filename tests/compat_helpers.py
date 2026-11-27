@@ -89,22 +89,19 @@ def skip_unless_cpp_exe():
     )
 
 
-def python_decode_streams(
-    wire_path: Path,
-    *,
-    quiet: bool = False,
-) -> Dict[str, np.ndarray]:
+def python_decode_streams(wire_path: Path, *, quiet: bool = False, enable_motion: bool = False) -> Dict[str, np.ndarray]:
     """Decrypt/decode every REPORT via EmotivEpocX (identical to LSL push payload)."""
     from emotiv_lsl.emotiv_epoc_x import EmotivEpocX
     from emotiv_lsl.epocx_wire import (
         EEG_STREAM_NAME,
+        MOTION_STREAM_NAME,
         QUALITY_STREAM_NAME,
         WireReplaySource,
     )
 
     src = WireReplaySource.from_path(wire_path, speed=0.0)
     headset = EmotivEpocX(
-        enable_motion_data=False,
+        enable_motion_data=enable_motion,
         enable_electrode_quality_stream=True,
         replay_source=src,
         replay_speed=0.0,
@@ -115,6 +112,7 @@ def python_decode_streams(
 
     eeg: List[List[float]] = []
     quality: List[List[float]] = []
+    motion: List[List[float]] = []
     n_raw = 0
     while True:
         data = src.read(headset.READ_SIZE)
@@ -132,14 +130,17 @@ def python_decode_streams(
             eeg.append([float(x) for x in decoded])
             if cq is not None and len(cq) == 14:
                 quality.append([float(x) for x in cq])
-        ## END if len(decoded) == 14....
-    ## END while True....
+        elif len(decoded) == 10 and enable_motion:
+            motion.append([float(x) for x in decoded])
+    ## END while True...
 
     if not quiet:
-        print(f"  python decode: raw_reports={n_raw} eeg={len(eeg)} quality={len(quality)}")
+        print(f"  python decode: raw_reports={n_raw} eeg={len(eeg)} quality={len(quality)} motion={len(motion)}")
     out = {EEG_STREAM_NAME: np.asarray(eeg, dtype=np.float64)}
     if quality:
         out[QUALITY_STREAM_NAME] = np.asarray(quality, dtype=np.float64)
+    if motion:
+        out[MOTION_STREAM_NAME] = np.asarray(motion, dtype=np.float64)
     return out
 
 

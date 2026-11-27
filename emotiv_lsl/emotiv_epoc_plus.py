@@ -34,24 +34,25 @@ class EmotivEpocPlus(EmotivBase):
         return find_emotiv_hid_device()
 
     def get_crypto_key(self) -> bytearray:
-        serial = self.get_hid_device()['serial_number']
-        
-        # EPOC+ in 16-bit Mode.
-        if not self.is_fourteen_bit_mode:
-            k = ['\0'] * 16
-            k = [sn[-1],sn[-2],sn[-2],sn[-3],sn[-3],sn[-3],sn[-2],sn[-4],sn[-1],sn[-4],sn[-2],sn[-2],sn[-4],sn[-4],sn[-2],sn[-1]]
+        if self.serial_number is None:
+            serial = self.get_hid_device()['serial_number']
+            self.serial_number = serial
+        elif isinstance(self.serial_number, (bytes, bytearray)) and len(self.serial_number) == 16:
+            return bytearray(self.serial_number)
         else:
-            # EPOC+ in 14-bit Mode.
-            k = [sn[-1],00,sn[-2],21,sn[-3],00,sn[-4],12,sn[-3],00,sn[-2],68,sn[-1],00,sn[-2],88]
-            
-        self.key = str(''.join(k))
-        self.cipher = AES.new(self.key.encode("utf8"), AES.MODE_ECB)
-        
+            serial = str(self.serial_number)
+
         sn = bytearray()
         for i in range(0, len(serial)):
             sn += bytearray([ord(serial[i])])
+        ## END for i in range(0, len(serial))...
 
-        return bytearray([sn[-1], sn[-2], sn[-4], sn[-4], sn[-2], sn[-1], sn[-2], sn[-4], sn[-1], sn[-4], sn[-3], sn[-2], sn[-1], sn[-2], sn[-2], sn[-3]])
+        if not self.is_fourteen_bit_mode:
+            # EPOC+ 16-bit USB HID key schedule.
+            return bytearray([sn[-1], sn[-2], sn[-2], sn[-3], sn[-3], sn[-3], sn[-2], sn[-4], sn[-1], sn[-4], sn[-2], sn[-2], sn[-4], sn[-4], sn[-2], sn[-1]])
+
+        # EPOC+ 14-bit USB HID key schedule.
+        return bytearray([sn[-1], 0x00, sn[-2], 21, sn[-3], 0x00, sn[-4], 12, sn[-3], 0x00, sn[-2], 68, sn[-1], 0x00, sn[-2], 88])
 
     def get_lsl_outlet_eeg_stream_info(self) -> StreamInfo:
         ch_names = ['AF3', 'F7', 'F3', 'FC5', 'T7', 'P7', 'O1', 'O2', 'P8', 'T8', 'FC6', 'F4', 'F8', 'AF4']

@@ -134,5 +134,42 @@ class TestFlutterRawRoundtrip(unittest.TestCase):
             self.assertEqual(len(result.motion), 1)
 
 
+    def test_live_ble_84_byte_superframe_vector(self):
+        """Verify 84B BLE 81072f41 super-frame splits into 2x32B EEG + 1x20B Motion without dropping [64:84]."""
+        ble_notif84 = bytes.fromhex(
+            "af9cd8172ca53cecd8f1627b69f213e9653f8408f7a426d7c54aefb5b8f89dc9"
+            "29d229dc9fa9c17c59cf980caf2a98a7073ae429942960763587d913b23453bf"
+            "1f20d4792147eaf80110e244f084ffffffffffff"
+        )
+        self.assertEqual(classify_payload(ble_notif84, "eeg"), "superframe")
+        self.assertEqual([len(p) for p in split_packages(ble_notif84, "superframe")], [32, 32, 20])
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            meta = {
+                "deviceName": "EPOCX (E50202E9)",
+                "btKeyHex": "E50202E92B",
+                "serialSource": "ble_hex",
+                "eegResolutionBits": 16,
+                "fwVersion": "0x0720",
+            }
+            (tmp / "session.json").write_text(json.dumps(meta), encoding="utf-8")
+            b_str = " ".join(str(b) for b in ble_notif84)
+            lines = [
+                "wall_ms,mono_us,kind,char_uuid,bytes",
+                f"1000,100,eeg,81072F41-9F3D-11E3-A9DC-0002A5D5C51B,{b_str}",
+            ]
+            (tmp / "raw.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            wire_path = tmp / "ble84.epocxwire"
+            result = decode_session_folder(tmp, write_csvs=False, wire_path=wire_path)
+            self.assertEqual(len(result.eeg), 2)
+            self.assertEqual(len(result.motion), 1)
+            self.assertAlmostEqual(result.eeg[1].values[0], 4098.076923076923, places=12)
+            self.assertAlmostEqual(result.motion[0].values[0], 0.39887392227603463, places=12)
+            self.assertAlmostEqual(result.motion[0].values[4], -0.9293126602368453, places=12)
+            wire = read_wire_file(wire_path)
+            self.assertEqual([len(p.payload) for p in wire.packets], [32, 32, 20])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

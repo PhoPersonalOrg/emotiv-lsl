@@ -45,11 +45,18 @@ from typing import (
 from Crypto.Cipher import AES
 
 from emotiv_lsl.emotiv_epoc_x import (
+    ADC_DIV_14BIT,
     ADC_DIV_16BIT,
+    CQ_SLOT_SCALE_DIVISORS,
+    CQ_SLOT_TO_1020_IDX,
     EEG_TYPE,
     EPOCX_RAW_EEG_ID_MODE7,
     MOTION_TYPE,
+    V2_MAX_FW,
+    V2_XOR_BYTE,
+    V4_XOR_BYTE,
     aes_key_epocx_mode,
+    derive_v4_key,
     serial_bytes_ble_hex,
     serial_bytes_hid,
 )
@@ -76,6 +83,12 @@ class WireHeader:
     serial_source: str = "hid"
     adc_div: float = ADC_DIV_16BIT
     eeg_hz: float = 128.0
+    mems_hz: Optional[float] = None
+    headset_serial: Optional[str] = None
+    headset_fw: Optional[int] = None
+    dongle_fw: Optional[int] = None
+    eeg_bits: Optional[int] = None
+    mems_bits: Optional[int] = None
     # Optional device / capture metadata (EPOCXWIRE/2)
     vid: Optional[int] = None
     pid: Optional[int] = None
@@ -132,6 +145,9 @@ class WireFile:
 
 
 def _aes_key_from_header(header: WireHeader) -> bytes:
+    if header.headset_fw is not None and int(header.headset_fw) > V2_MAX_FW:
+        v4_serial = header.headset_serial or header.serial
+        return derive_v4_key(v4_serial, int(header.headset_fw))
     if header.serial_source == "ble_hex":
         s4 = serial_bytes_ble_hex(header.serial)
     else:
@@ -139,13 +155,28 @@ def _aes_key_from_header(header: WireHeader) -> bytes:
     return aes_key_epocx_mode(s4)
 
 
+def encrypt_wire_packet(plain: bytes, key: bytes, *, is_v4: Optional[bool] = None, is_mems: bool = False) -> bytes:
+    """Inverse of EmotivEpocX.decrypt_packet for 32B USB/EEG blocks and 20B BLE Motion."""
+    raw = bytes(plain)
+    v4 = (len(key) == 32) if is_v4 is None else bool(is_v4)
+    if not v4:
+        if is_mems:
+            return raw
+        cipher = AES.new(key, AES.MODE_ECB)
+        encrypted = cipher.encrypt(raw)
+        return bytes(b ^ V2_XOR_BYTE for b in encrypted)
+
+    n_aligned = (len(raw) // 16) * 16
+    cipher = AES.new(key, AES.MODE_ECB)
+    head_enc = cipher.encrypt(raw[:n_aligned]) if n_aligned > 0 else b""
+    return bytes(b ^ V4_XOR_BYTE for b in head_enc) + bytes(b ^ V4_XOR_BYTE for b in raw[n_aligned:])
+
+
 def encrypt_eeg_plain(plain32: bytes, key16: bytes) -> bytes:
-    """AES-128-ECB encrypt then XOR 0x55 (inverse of decrypt_eeg_packet)."""
+    """AES-ECB encrypt then XOR (V2: AES-128 + 0x55; V4: AES-256 + 0x14)."""
     if len(plain32) != 32:
         raise ValueError(f"plain needs 32 bytes, got {len(plain32)}")
-    cipher = AES.new(key16, AES.MODE_ECB)
-    encrypted = cipher.encrypt(bytes(plain32))
-    return bytes(b ^ 0x55 for b in encrypted)
+    return encrypt_wire_packet(plain32, key16, is_mems=False)
 
 
 def pack_mode7_plain(
@@ -180,13 +211,10 @@ def encode_eeg_wire(
     return encrypt_eeg_plain(plain, key16)
 
 
-def encode_motion_wire(
-    counter: int,
-    motion10: Sequence[float],
-) -> bytes:
-    """Pack Android 20 B motion from [Q0,Q1,Q2,Q3,AccX,AccY,AccZ,MagX,MagY,MagZ].
+def encode_motion_wire(counter: int, motion10: Sequence[float], *, headband_position: str = "top") -> bytes:
+    """Pack 20-byte Motion plaintext from `[Q0,Q1,Q2,Q3,AccX,AccY,AccZ,MagX,MagY,MagZ]`.
 
-    Q0 is derived on decode and ignored here. Inverse of correctMotionDirection.
+    Q0 is derived on decode and ignored here. Inverse of `decode_motion_data`.
     """
     if len(motion10) < 10:
         raise ValueError(f"need 10 motion channels, got {len(motion10)}")
@@ -200,29 +228,58 @@ def encode_motion_wire(
     magy = float(motion10[8]) * 6.0
     magz = float(motion10[9]) * 6.0
 
-    # Inverse correctMotionDirection:
-    # q1=raw1, q2=-raw0, q3=raw2, accx=raw4, accy=-raw3, accz=raw5,
-    # magx=-raw7, magy=raw6, magz=raw8
-    raws = [
-        int(round(-q2)),  # raw0
-        int(round(q1)),  # raw1
-        int(round(q3)),  # raw2
-        int(round(-accy)),  # raw3
-        int(round(accx)),  # raw4
-        int(round(accz)),  # raw5
-        int(round(magy)),  # raw6
-        int(round(-magx)),  # raw7
-        int(round(magz)),  # raw8
-    ]
+    if str(headband_position).strip().lower() == "back":
+        raws = [
+            int(round(q1)),
+            int(round(q2)),
+            int(round(q3)),
+            int(round(accx)),
+            int(round(accy)),
+            int(round(accz)),
+            int(round(magx)),
+            int(round(magy)),
+            int(round(magz)),
+        ]
+    else:
+        raws = [
+            int(round(-q2)),  # raw0
+            int(round(q1)),   # raw1
+            int(round(q3)),   # raw2
+            int(round(-accy)),  # raw3
+            int(round(accx)),   # raw4
+            int(round(accz)),   # raw5
+            int(round(magy)),   # raw6
+            int(round(-magx)),  # raw7
+            int(round(magz)),   # raw8
+        ]
     buf = bytearray(20)
-    buf[0] = counter & 0xFF
+    buf[0] = counter & 0x7F
     buf[1] = MOTION_TYPE
     for i, v in enumerate(raws):
         v = max(-32768, min(32767, v))
         struct.pack_into(">h", buf, 2 + 2 * i, v)
-    ## END for i, v in enumerate(raws)....
+    ## END for i, v in enumerate(raws)...
 
     return bytes(buf)
+
+
+def encode_usb_motion_wire(counter: int, motion10: Sequence[float], key: bytes, *, headband_position: str = "top") -> bytes:
+    """Pack and encrypt a 32-byte 2.4 GHz USB HID Motion report (20B Motion + 12B zero pad)."""
+    plain20 = encode_motion_wire(counter, motion10, headband_position=headband_position)
+    plain32 = plain20 + (b"\x00" * 12)
+    return encrypt_eeg_plain(plain32, key)
+
+
+def cq_grade_to_word7(grade: float, slot: int) -> int:
+    """Inverse-map a discrete Cortex CQ grade `{0, 1, 2, 4}` on `slot` (0..13) to raw 16-bit `words[7]`."""
+    if not (0 <= slot < 14):
+        return 0
+    g = int(round(float(grade)))
+    if g <= 0:
+        return 0
+    target_norm = 0.45 if g == 1 else (1.20 if g == 2 else 2.00)
+    raw = int(round((target_norm * CQ_SLOT_SCALE_DIVISORS[slot]) / 0.25))
+    return max(0, min(0xFFFF, raw))
 
 
 def try_get_report_descriptor_hex(hid_device: Any, *, buf_size: int = 4096) -> Optional[str]:
@@ -264,17 +321,8 @@ def try_get_report_descriptor_hex(hid_device: Any, *, buf_size: int = 4096) -> O
     return None
 
 
-def header_from_hid_device(
-    device: Dict[str, Any],
-    *,
-    serial_source: str = "hid",
-    adc_div: float = ADC_DIV_16BIT,
-    eeg_hz: float = 128.0,
-    read_size: Optional[int] = None,
-    read_timeout_ms: Optional[int] = None,
-    report_descriptor: Optional[str] = None,
-) -> WireHeader:
-    """Build a WireHeader from a hidapi enumerate() dict."""
+def header_from_hid_device(device: Dict[str, Any], *, serial_source: str = "hid", adc_div: float = ADC_DIV_16BIT, eeg_hz: float = 128.0, mems_hz: Optional[float] = None, headset_serial: Optional[str] = None, headset_fw: Optional[int] = None, dongle_fw: Optional[int] = None, eeg_bits: Optional[int] = None, mems_bits: Optional[int] = None, read_size: Optional[int] = None, read_timeout_ms: Optional[int] = None, report_descriptor: Optional[str] = None) -> WireHeader:
+    """Build a WireHeader from a hidapi enumerate() dict and optional Feature Report 0x00 state."""
     serial = device.get("serial_number") or DEFAULT_SERIAL
     if isinstance(serial, bytes):
         serial = serial.decode("utf-8", errors="replace")
@@ -286,6 +334,12 @@ def header_from_hid_device(
         serial_source=serial_source,
         adc_div=adc_div,
         eeg_hz=eeg_hz,
+        mems_hz=mems_hz,
+        headset_serial=headset_serial,
+        headset_fw=headset_fw,
+        dongle_fw=dongle_fw,
+        eeg_bits=eeg_bits,
+        mems_bits=mems_bits,
         vid=device.get("vendor_id"),
         pid=device.get("product_id"),
         manufacturer=device.get("manufacturer_string") or None,
@@ -312,6 +366,12 @@ def _write_header(f: BinaryIO, header: WireHeader, *, magic: str = MAGIC_V2) -> 
     f.write(f"adc_div={header.adc_div}\n".encode("utf-8"))
     f.write(f"eeg_hz={header.eeg_hz}\n".encode("utf-8"))
     optional: List[Tuple[str, Optional[Union[str, int, float]]]] = [
+        ("mems_hz", header.mems_hz),
+        ("headset_serial", header.headset_serial),
+        ("headset_fw", f"0x{int(header.headset_fw):04X}" if header.headset_fw is not None else None),
+        ("dongle_fw", f"0x{int(header.dongle_fw):04X}" if header.dongle_fw is not None else None),
+        ("eeg_bits", header.eeg_bits),
+        ("mems_bits", header.mems_bits),
         ("vid", header.vid),
         ("pid", header.pid),
         ("manufacturer", header.manufacturer),
@@ -444,6 +504,18 @@ def _parse_header_lines(lines: List[str]) -> WireHeader:
             header.adc_div = float(v)
         elif k == "eeg_hz":
             header.eeg_hz = float(v)
+        elif k == "mems_hz":
+            header.mems_hz = float(v)
+        elif k == "headset_serial":
+            header.headset_serial = v
+        elif k == "headset_fw":
+            header.headset_fw = int(v, 0)
+        elif k == "dongle_fw":
+            header.dongle_fw = int(v, 0)
+        elif k == "eeg_bits":
+            header.eeg_bits = int(v, 0)
+        elif k == "mems_bits":
+            header.mems_bits = int(v, 0)
         elif k == "vid":
             header.vid = int(v, 0)
         elif k == "pid":
@@ -572,30 +644,29 @@ def _stream_by_name(streams: list, name: str) -> Optional[dict]:
     return None
 
 
-def _nearest_cq(quality_ts: Sequence[float], quality_data, t: float) -> int:
+def _nearest_cq(quality_ts: Sequence[float], quality_data, t: float, *, counter: int = 0, eeg_rate: int = 128) -> int:
     if quality_ts is None or len(quality_ts) == 0:
         return 0
     import numpy as np
 
+    half_rate = max(1, int(eeg_rate) // 2)
+    slot = (int(counter) & 0xFF) % half_rate
+    if not (0 <= slot < 14):
+        return 0
+
     idx = int(np.argmin(np.abs(np.asarray(quality_ts) - t)))
     sample = quality_data[idx]
-    # Broadcast CQ: first channel is enough
     try:
-        return int(round(float(sample[0]))) & 0x7F
+        ch_idx = CQ_SLOT_TO_1020_IDX[slot] if len(sample) >= 14 else 0
+        return cq_grade_to_word7(float(sample[ch_idx]), slot)
     except Exception:
         return 0
 
 
-def xdf_to_wire(
-    xdf_path: Union[str, Path],
-    *,
-    serial: str = DEFAULT_SERIAL,
-    serial_source: str = "hid",
-    adc_div: float = ADC_DIV_16BIT,
-) -> WireFile:
+def xdf_to_wire(xdf_path: Union[str, Path], *, serial: str = DEFAULT_SERIAL, serial_source: str = "hid", adc_div: float = ADC_DIV_16BIT) -> WireFile:
     """Load an Epoc X LabRecorder XDF and build timed wire packets.
 
-    Synthetic (re-encrypts decoded µV). Prefer live ``--record`` for exact HID bytes.
+    Synthetic (re-encrypts decoded µV and 32B USB motion). Prefer live ``--record`` for exact HID bytes.
     """
     import pyxdf
 
@@ -621,11 +692,16 @@ def xdf_to_wire(
     if m_ts is not None and len(m_ts) > 0:
         t0 = min(t0, float(m_ts[0]))
 
+    eeg_hz = float((eeg.get("info") or {}).get("nominal_srate", [128])[0] or 128)
+    eeg_rate_int = 256 if int(round(eeg_hz)) >= 256 else 128
+    mems_hz = float((motion.get("info") or {}).get("nominal_srate", [32])[0] or 32) if motion is not None else None
+
     header = WireHeader(
         serial=serial,
         serial_source=serial_source,
         adc_div=adc_div,
-        eeg_hz=float((eeg.get("info") or {}).get("nominal_srate", [128])[0] or 128),
+        eeg_hz=eeg_hz,
+        mems_hz=mems_hz,
         format_version=2,
     )
     key = _aes_key_from_header(header)
@@ -633,12 +709,12 @@ def xdf_to_wire(
     timed: List[Tuple[float, str, int]] = []
     for i, t in enumerate(eeg_ts):
         timed.append((float(t), "eeg", i))
-    ## END for i, t in enumerate(eeg_ts)....
+    ## END for i, t in enumerate(eeg_ts)...
 
     if m_ts is not None:
         for i, t in enumerate(m_ts):
             timed.append((float(t), "motion", i))
-        ## END for i, t in enumerate(m_ts)....
+        ## END for i, t in enumerate(m_ts)...
 
     timed.sort(key=lambda e: e[0])
 
@@ -649,20 +725,23 @@ def xdf_to_wire(
         rel_ns = int(round((t - t0) * 1e9))
         if kind == "eeg":
             sample = eeg_data[idx][:14]
-            cq = _nearest_cq(q_ts, q_data, t) if q_ts is not None else 0
+            cq = _nearest_cq(q_ts, q_data, t, counter=eeg_counter, eeg_rate=eeg_rate_int) if q_ts is not None else 0
             payload = encode_eeg_wire(
                 eeg_counter, sample, key, cq=cq, adc_div=adc_div
             )
-            eeg_counter = (eeg_counter + 1) & 0xFF
+            eeg_counter = (eeg_counter + 1) % eeg_rate_int
             packets.append(WirePacket(rel_ns=rel_ns, payload=payload))
         else:
             sample = m_data[idx]
             if len(sample) < 10:
                 continue
-            payload = encode_motion_wire(motion_counter, sample)
-            motion_counter = (motion_counter + 1) & 0xFF
+            if serial_source == "ble_hex":
+                payload = encrypt_wire_packet(encode_motion_wire(motion_counter, sample), key, is_mems=True)
+            else:
+                payload = encode_usb_motion_wire(motion_counter, sample, key)
+            motion_counter = (motion_counter + 1) % 128
             packets.append(WirePacket(rel_ns=rel_ns, payload=payload))
-    ## END for t, kind, idx in timed....
+    ## END for t, kind, idx in timed...
 
     return WireFile(header=header, packets=packets)
 
@@ -788,16 +867,29 @@ class WireReplaySource:
         return self.wire.header
 
     def apply_serial_to(self, headset) -> None:
-        """Inject serial into EmotivEpocX before crypto use."""
+        """Inject serial and optional USB Feature Report 0x00 metadata into EmotivEpocX before crypto use."""
         headset.serial_number = self.header.serial
         if hasattr(headset, "serial_source"):
             headset.serial_source = self.header.serial_source
+        if hasattr(headset, "headset_serial") and self.header.headset_serial:
+            headset.headset_serial = self.header.headset_serial
+        if hasattr(headset, "headset_fw") and self.header.headset_fw is not None:
+            headset.headset_fw = self.header.headset_fw
+        if hasattr(headset, "dongle_fw") and self.header.dongle_fw is not None:
+            headset.dongle_fw = self.header.dongle_fw
         if hasattr(headset, "eeg_resolution_bits"):
-            headset.eeg_resolution_bits = (
-                0x10 if abs(self.header.adc_div - ADC_DIV_16BIT) < 0.01 else 0x0E
-            )
+            if self.header.eeg_bits in (14, 16):
+                headset.eeg_resolution_bits = 0x10 if self.header.eeg_bits == 16 else 0x0E
+            else:
+                headset.eeg_resolution_bits = (
+                    0x10 if abs(self.header.adc_div - ADC_DIV_16BIT) < 0.01 else 0x0E
+                )
         if hasattr(headset, "eeg_rate") and self.header.eeg_hz > 0:
             headset.eeg_rate = int(round(self.header.eeg_hz))
+        if hasattr(headset, "mems_rate") and self.header.mems_hz is not None and self.header.mems_hz >= 0:
+            headset.mems_rate = int(round(self.header.mems_hz))
+        if hasattr(headset, "mems_bits") and self.header.mems_bits in (14, 16):
+            headset.mems_bits = int(self.header.mems_bits)
         headset.cipher = AES.new(headset.get_crypto_key(), AES.MODE_ECB)
 
     def _pace(self, rel_ns: int) -> None:
