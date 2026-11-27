@@ -1,7 +1,7 @@
 """Flutter logger as third headset client: session → offline → wire → Python/C++.
 
 Hard-fail EEG sample parity. Live Flutter also publishes ``Epoc X eQuality``
-(14-ch broadcast Mode-7 CQ); offline CSV decode exercises raw.csv → EEG/wire.
+(legacy broadcast Mode-7 CQ until updated; Python uses per-electrode CQ demux); offline CSV decode exercises raw.csv → EEG/wire.
 """
 from __future__ import annotations
 

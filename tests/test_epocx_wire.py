@@ -56,7 +56,7 @@ class TestEncodeDecodeRoundtrip(unittest.TestCase):
     def test_eeg_uv_roundtrip(self):
         # Distinct µV so remap is obvious after quantize.
         uv = [100.0 + i * 10.0 for i in range(14)]
-        cq = 0x2B
+        cq = 1800  # counter=3 -> slot 3 (F7, 10-20 idx 1, div 235.0): (1800 * 0.25) / 235 = 1.915 -> grade 4
         wire = encode_eeg_wire(3, uv, self.key, cq=cq, adc_div=ADC_DIV_16BIT)
         self.assertEqual(len(wire), 32)
         eeg, quality = self.headset.decode_data(wire)
@@ -68,7 +68,9 @@ class TestEncodeDecodeRoundtrip(unittest.TestCase):
             self.assertAlmostEqual(a, expected, places=9)
         ## END for a, b in zip(eeg, uv)....
 
-        self.assertEqual(quality[0], float(cq))
+        expected_cq = [0.0] * 14
+        expected_cq[1] = 4.0
+        self.assertEqual(quality, expected_cq)
 
     def test_motion_roundtrip(self):
         # Q0 derived; use small quaternion parts so Q0 is real.

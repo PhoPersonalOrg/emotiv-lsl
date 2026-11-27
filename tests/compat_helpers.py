@@ -16,9 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 MODE7_TWO_PACKET = FIXTURES_DIR / "mode7_two_packet.epocxwire"
 
-# Cross-repo gold expectations (matches emotiv-lsl-cpp test_wire_fixture_replay).
+# Cross-repo gold expectations (matches emotiv-lsl-cpp test_wire_fixture_replay EEG).
 FIXTURE_SERIAL = "UD20221202006756"
-FIXTURE_CQ = 0x2B
+FIXTURE_CQ = 0x2B  # raw word7 in mode7_two_packet.epocxwire -> norm < 0.2 -> grade 0
+SYNTH_CQ_WORD7_CYCLE: Tuple[int, int, int, int] = (100, 400, 900, 1800)  # grades (0, 1, 2, 4) across all 14 divisors
 FIXTURE_AF3_UV = round(100.0 * 7.8) / 7.8
 SAMPLE_ATOL = 1e-2
 
@@ -376,14 +377,8 @@ def make_flutter_headset_for_info(
     )
 
 
-def build_synthetic_wire(
-    n_packets: int = 16,
-    *,
-    serial: str = FIXTURE_SERIAL,
-    cq: int = FIXTURE_CQ,
-    spacing_ns: int = 7_812_500,
-):
-    """Build a WireFile with deterministic Mode-7 EEG+CQ packets."""
+def build_synthetic_wire(n_packets: int = 16, *, serial: str = FIXTURE_SERIAL, cq: Optional[int] = None, spacing_ns: int = 7_812_500):
+    """Build a WireFile with deterministic Mode-7 EEG + per-slot 16-bit CQ packets."""
     from emotiv_lsl.emotiv_epoc_x import (
         ADC_DIV_16BIT,
         aes_key_epocx_mode,
@@ -403,7 +398,8 @@ def build_synthetic_wire(
     events: List[WireEvent] = []
     for i in range(n_packets):
         uv = [100.0 + i * 1.0 + ch * 0.5 for ch in range(14)]
-        payload = encode_eeg_wire(i + 1, uv, key, cq=cq, adc_div=ADC_DIV_16BIT)
+        word7 = SYNTH_CQ_WORD7_CYCLE[i % len(SYNTH_CQ_WORD7_CYCLE)] if cq is None else int(cq)
+        payload = encode_eeg_wire(i + 1, uv, key, cq=word7, adc_div=ADC_DIV_16BIT)
         rel_ns = i * spacing_ns
         packets.append(WirePacket(rel_ns=rel_ns, payload=payload))
         events.append(WireEvent(rel_ns=rel_ns, kind=EVENT_REPORT, payload=payload))
@@ -417,6 +413,26 @@ def build_synthetic_wire(
         format_version=2,
     )
     return WireFile(header=header, packets=packets, events=events)
+
+
+def expected_synth_cq_matrix(n_packets: int = 16, *, cq: Optional[int] = None, eeg_rate: int = 128) -> np.ndarray:
+    """Compute expected sticky 14-ch 10-20 CQ grades {0, 1, 2, 4} for build_synthetic_wire."""
+    from emotiv_lsl.emotiv_epoc_x import CQ_SLOT_SCALE_DIVISORS, CQ_SLOT_TO_1020_IDX, cq_norm_to_grade
+
+    state = [0.0] * 14
+    rows: List[List[float]] = []
+    half_rate = max(1, int(eeg_rate) // 2)
+    for i in range(n_packets):
+        counter = (i + 1) & 0xFF
+        word7 = SYNTH_CQ_WORD7_CYCLE[i % len(SYNTH_CQ_WORD7_CYCLE)] if cq is None else int(cq)
+        slot = counter % half_rate
+        if 0 <= slot < 14:
+            norm = (float(word7 & 0xFFFF) * 0.25) / CQ_SLOT_SCALE_DIVISORS[slot]
+            state[CQ_SLOT_TO_1020_IDX[slot]] = float(cq_norm_to_grade(norm))
+        rows.append(list(state))
+    ## END for i in range(n_packets)...
+
+    return np.asarray(rows, dtype=np.float64)
 
 
 def build_synthetic_flutter_session(
@@ -563,7 +579,14 @@ def capture_cpp_lsl(
     """Launch C++ replay and pull LSL samples while it waits for consumers."""
     from pylsl import ContinuousResolver
 
-    from emotiv_lsl.epocx_wire import EEG_STREAM_NAME
+    from emotiv_lsl.emotiv_epoc_x import EmotivEpocX
+    from emotiv_lsl.epocx_wire import EEG_STREAM_NAME, read_wire_file
+
+    wire_hdr = read_wire_file(wire_v1).header
+    expected_source_id = EmotivEpocX(
+        serial_number=wire_hdr.serial,
+        serial_source=wire_hdr.serial_source,
+    ).get_lsl_source_id()
 
     if kill_stale_windows and os.name == "nt":
         # Opt-in: avoids surprising local sessions; CLI may set True.
@@ -657,7 +680,9 @@ def capture_cpp_lsl(
             for name, resolver in resolvers.items():
                 if name in inlets:
                     continue
-                results = resolver.results()
+                results = [
+                    r for r in resolver.results() if r.source_id() == expected_source_id
+                ]
                 if not results:
                     continue
                 inlets[name] = _open_inlet(results[0])

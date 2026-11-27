@@ -149,7 +149,7 @@ class EmotivBase(EasyTimeSyncParsingMixin):
     def extractQualityValues(self, data, return_as_array: bool=True) -> Union[np.ndarray, Dict[str, float], None]:
         """Contact quality from a decrypted package.
 
-        KeyModel 8 (Epoc X Mode-7): CQ = word7 & 0x7f when type==0x10 (broadcast).
+        KeyModel 8 (Epoc X Mode-7): per-electrode CQ demux from 16-bit word7 + counter when type==0x10.
         Older models: CyKit nibble scrape of bytes 16–22.
         """
         import struct
@@ -164,14 +164,19 @@ class EmotivBase(EasyTimeSyncParsingMixin):
                             'P8': data[20] & 0xF, 'T8': (data[20] >> 4) & 0xF,
                             'FC6': data[21] & 0xF, 'F4': (data[21] >> 4) & 0xF,
                             'F8': data[22] & 0xF, 'AF4': (data[22] >> 4) & 0xF}
-        elif self.KeyModel == 8:  # Epoc X Mode-7 — Android EpocPlusMode CQ
+        elif self.KeyModel == 8:  # Epoc X Mode-7 — Cortex per-electrode CQ demux
             if data is None or len(data) < 32:
                 return None
             if (data[1] & 0x7F) != 0x10:
                 return None
+            counter = data[0]
             words = struct.unpack_from("<15H", bytes(data), 2)
-            cq = float(words[7] & 0x7F)
-            quality_values_dict = {name: cq for name in self.eeg_channel_names}
+            if hasattr(self, "update_cq_from_word7"):
+                grades = self.update_cq_from_word7(counter, words[7])
+                quality_values_dict = dict(zip(self.eeg_channel_names, grades))
+            else:
+                cq = float(words[7] & 0x7F)
+                quality_values_dict = {name: cq for name in self.eeg_channel_names}
         elif (self.KeyModel == 6) or (self.KeyModel == 5):  # Epoc+
             quality_values_dict = {'AF3': data[16] & 0xF, 'F7': (data[16] >> 4) & 0xF,
                             'F3': data[17] & 0xF, 'FC5': (data[17] >> 4) & 0xF,

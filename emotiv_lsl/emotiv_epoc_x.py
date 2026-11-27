@@ -19,12 +19,36 @@ EPOCX_MODE_PERM = [0, 1, 3, 3, 1, 0, 1, 3, 0, 3, 2, 1, 0, 1, 1, 2]
 # Android getRawEegId for HeadsetType 7, mode 7 (skips word 7 / CQ).
 EPOCX_RAW_EEG_ID_MODE7 = [2, 3, 0, 1, 4, 5, 6, 8, 9, 10, 13, 14, 11, 12]
 
+# Cortex DataOutputContactQuality (slot = counter % (eeg_rate // 2), slots 0..13 in ASIC order).
+CQ_SLOT_CHANNEL_ORDER: Tuple[str, ...] = (
+    "F3", "FC5", "AF3", "F7", "T7", "P7", "O1",
+    "O2", "P8", "T8", "F8", "AF4", "FC6", "F4",
+)
+CQ_SLOT_SCALE_DIVISORS: Tuple[float, ...] = (
+    212.0, 216.0, 226.0, 235.0, 231.0, 239.0, 245.0,
+    179.0, 167.0, 162.0, 206.0, 204.0, 194.0, 179.0,
+)
+CQ_GRADE_THRESHOLDS: Tuple[float, float, float] = (0.2, 0.7, 1.7)
+CQ_SLOT_TO_1020_IDX: Tuple[int, ...] = (2, 3, 0, 1, 4, 5, 6, 7, 8, 9, 12, 13, 10, 11)
+
 # Android convertADCToMicrovolt: 16-bit → ÷7.8, 14-bit → ÷1.95.
 ADC_DIV_16BIT = 7.8
 ADC_DIV_14BIT = 1.95
 
 EEG_TYPE = 0x10
 MOTION_TYPE = 0x20
+
+
+def cq_norm_to_grade(norm: float) -> int:
+    """Discrete Cortex CQ grade {0, 1, 2, 4} from normalized ratio."""
+    t0, t1, t2 = CQ_GRADE_THRESHOLDS
+    if norm < t0:
+        return 0
+    if norm < t1:
+        return 1
+    if norm < t2:
+        return 2
+    return 4
 
 
 def aes_key_epocx_mode(s4: bytes) -> bytes:
@@ -78,6 +102,8 @@ class EmotivEpocX(EmotivBase):
     serial_source: str = field(default="hid")
     # Android EEG resolution bits (+0xb4): 0x10 → ÷7.8, else ÷1.95.
     eeg_resolution_bits: int = field(default=0x10)
+    eeg_rate: int = field(default=SRATE)
+    _cq_grades: List[float] = field(factory=lambda: [0.0] * 14, init=False, repr=False)
 
     def __attrs_post_init__(self):
         if self.cipher is None:
@@ -222,7 +248,7 @@ class EmotivEpocX(EmotivBase):
         return info
 
     def get_lsl_outlet_electrode_quality_stream_info(self) -> StreamInfo:
-        """CQ stream. Mode-7 exposes a single contact-quality word broadcast to 14 labels."""
+        """Per-electrode Contact Quality (CQ) stream in 10-20 channel order (grades {0, 1, 2, 4})."""
         ch_names = self.eeg_quality_channel_names
         n_channels = len(ch_names)
 
@@ -241,17 +267,29 @@ class EmotivEpocX(EmotivBase):
             ch.append_child_value("unit", "cq")
             ch.append_child_value("type", "CQ")
             ch.append_child_value("scaling_factor", "1")
+        ## END for label in ch_names...
 
         cap = info.desc().append_child("cap")
         cap.append_child_value("name", "easycap-M1")
         cap.append_child_value("labelscheme", "10-20")
         info.desc().append_child_value(
             "cq_note",
-            "Mode-7: CQ = word7 & 0x7f (broadcast to all quality channels)",
+            "Mode-7 per-electrode CQ demux: slot = counter % (eeg_rate // 2), norm = (word7 * 0.25) / scale[slot], grades {0,1,2,4}",
         )
 
         info = self.add_lsl_outlet_info_common(info)
         return info
+
+
+    def update_cq_from_word7(self, counter: int, word7: int) -> List[float]:
+        """Demux Mode-7 16-bit word7 by packet counter into sticky 10-20 CQ grades {0, 1, 2, 4}."""
+        half_rate = max(1, int(self.eeg_rate) // 2)
+        slot = (int(counter) & 0xFF) % half_rate
+        if 0 <= slot < 14:
+            norm = (float(int(word7) & 0xFFFF) * 0.25) / CQ_SLOT_SCALE_DIVISORS[slot]
+            self._cq_grades[CQ_SLOT_TO_1020_IDX[slot]] = float(cq_norm_to_grade(norm))
+        return list(self._cq_grades)
+
 
     def decrypt_eeg_packet(self, data) -> bytes:
         """XOR 0x55 then AES-128-ECB (Android decryptNewPack default / pre-V4)."""
@@ -285,9 +323,7 @@ class EmotivEpocX(EmotivBase):
 
         eeg_quality_data = None
         if self.enable_electrode_quality_stream:
-            cq = float(words[7] & 0x7F)
-            # Broadcast single Mode-7 CQ word (Android makeCQ gate omitted without counter plumbing).
-            eeg_quality_data = [cq] * len(self.eeg_channel_names)
+            eeg_quality_data = self.update_cq_from_word7(counter, words[7])
 
         return packet_data, eeg_quality_data
 

@@ -24,7 +24,6 @@ from emotiv_lsl.epocx_wire import (  # noqa: E402
 )
 from tests.compat_helpers import (  # noqa: E402
     FIXTURE_AF3_UV,
-    FIXTURE_CQ,
     FIXTURE_SERIAL,
     MODE7_TWO_PACKET,
     SAMPLE_ATOL,
@@ -32,6 +31,7 @@ from tests.compat_helpers import (  # noqa: E402
     capture_cpp_lsl,
     compare_sample_arrays_lsl,
     effective_replay_speed,
+    expected_synth_cq_matrix,
     find_cpp_exe,
     make_headset_for_info,
     python_decode_streams,
@@ -67,7 +67,7 @@ class TestOfflineDecodeGold(unittest.TestCase):
         )
 
     def test_mode7_two_packet_matches_cpp_gold(self):
-        """Lock Python decode to the same AF3/CQ numbers as C++ test_wire_fixture_replay."""
+        """Lock Python decode to the same AF3 µV as C++ test_wire_fixture_replay + Cortex CQ demux."""
         wire = read_wire_file(MODE7_TWO_PACKET)
         self.assertEqual(wire.header.serial, FIXTURE_SERIAL)
         self.assertEqual(wire.header.format_version, 1)
@@ -79,9 +79,8 @@ class TestOfflineDecodeGold(unittest.TestCase):
         self.assertEqual(eeg.shape, (2, 14))
         self.assertEqual(quality.shape, (2, 14))
         self.assertAlmostEqual(float(eeg[0, 0]), FIXTURE_AF3_UV, places=9)
-        self.assertAlmostEqual(float(quality[0, 0]), float(FIXTURE_CQ), places=9)
-        # Mode-7 CQ is broadcast to all quality channels.
-        self.assertTrue(np.allclose(quality[0], quality[0, 0]))
+        # Fixture packets have word7=0x2B on counters 1..2 -> norm < 0.2 -> grade 0 across all channels.
+        self.assertTrue(np.array_equal(quality, np.zeros((2, 14), dtype=np.float64)))
 
     def test_synthetic_encode_decode_roundtrip(self):
         wire = build_synthetic_wire(n_packets=16)
@@ -92,6 +91,7 @@ class TestOfflineDecodeGold(unittest.TestCase):
 
         eeg = streams[EEG_STREAM_NAME]
         quality = streams[QUALITY_STREAM_NAME]
+        expected_cq = expected_synth_cq_matrix(n_packets=16)
         self.assertEqual(eeg.shape, (16, 14))
         self.assertEqual(quality.shape, (16, 14))
         for i in range(16):
@@ -100,8 +100,13 @@ class TestOfflineDecodeGold(unittest.TestCase):
                 self.assertAlmostEqual(float(eeg[i, ch]), expected, places=9)
             ## END for ch in range(14)....
 
-            self.assertTrue(np.allclose(quality[i], float(FIXTURE_CQ)))
+            self.assertTrue(np.array_equal(quality[i], expected_cq[i]))
         ## END for i in range(16)....
+
+        # Verify distinct non-uniform per-electrode grades {0, 1, 2, 4} and sticky hold on counters 14..16.
+        self.assertEqual(set(np.unique(quality[-1]).tolist()), {0.0, 1.0, 2.0, 4.0})
+        self.assertTrue(np.array_equal(quality[13], quality[12]))
+        self.assertTrue(np.array_equal(quality[15], quality[12]))
 
 
 class TestPythonStreamInfoSchema(unittest.TestCase):
@@ -130,12 +135,13 @@ class TestPythonStreamInfoSchema(unittest.TestCase):
 @skip_unless_cpp_exe()
 class TestOptionalCppLslCompare(unittest.TestCase):
     def _compare_wire(self, wire_path: Path) -> None:
-        from emotiv_lsl.epocx_wire import EEG_STREAM_NAME, QUALITY_STREAM_NAME
+        from emotiv_lsl.epocx_wire import EEG_STREAM_NAME
 
         cpp_exe = find_cpp_exe()
         assert cpp_exe is not None
         wire = read_wire_file(wire_path)
-        stream_names = [EEG_STREAM_NAME, QUALITY_STREAM_NAME]
+        # C++ emotiv-lsl-cpp still emits legacy word7 & 0x7f broadcast CQ; compare EEG only here.
+        stream_names = [EEG_STREAM_NAME]
         py_streams = python_decode_streams(wire_path, quiet=True)
 
         with tempfile.TemporaryDirectory(prefix="epocx_cmp_") as td:

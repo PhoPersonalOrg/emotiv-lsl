@@ -164,7 +164,7 @@ def pack_mode7_plain(
         words[EPOCX_RAW_EEG_ID_MODE7[i]] = max(0, min(0xFFFF, raw))
     ## END for i, uv in enumerate(channels_uv)....
 
-    words[7] = int(cq) & 0x7F
+    words[7] = max(0, min(0xFFFF, int(cq)))
     return bytes([counter & 0xFF, EEG_TYPE & 0xFF]) + struct.pack("<15H", *words)
 
 
@@ -796,6 +796,8 @@ class WireReplaySource:
             headset.eeg_resolution_bits = (
                 0x10 if abs(self.header.adc_div - ADC_DIV_16BIT) < 0.01 else 0x0E
             )
+        if hasattr(headset, "eeg_rate") and self.header.eeg_hz > 0:
+            headset.eeg_rate = int(round(self.header.eeg_hz))
         headset.cipher = AES.new(headset.get_crypto_key(), AES.MODE_ECB)
 
     def _pace(self, rel_ns: int) -> None:

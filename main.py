@@ -123,6 +123,7 @@ def enforce_single_instance():
                     sys.exit(0)
         return s
 
+import signal
 import threading
 import pystray
 from PIL import Image
@@ -130,6 +131,7 @@ from PIL import Image
 console_visible = True
 _console_wndproc = None
 _old_console_wndproc = None
+_console_ctrl_handler = None  # ctypes callback ref; must stay alive
 
 TRAY_TITLE_NORMAL = "Emotiv LSL Server"
 TRAY_TITLE_DISCONNECTED = "Emotiv LSL — headset disconnected"
@@ -142,6 +144,8 @@ _flash_thread = None
 _tray_icon = None
 _icon_normal = None
 _icon_alert = None
+_app_exit_code = 0
+_quit_requested = threading.Event()
 
 
 def resource_path(*parts: str) -> str:
@@ -404,11 +408,65 @@ def run_emotiv_loop(
 def on_toggle_clicked(icon, item):
     toggle_console()
 
+
+def request_app_quit(exit_code: int = 0) -> None:
+    """Unblock tray_icon.run() so the main thread can exit. Safe from Ctrl+C."""
+    global _app_exit_code
+    if _quit_requested.is_set():
+        return
+    _app_exit_code = exit_code
+    _quit_requested.set()
+    # Only stop the tray here — flash cleanup runs in the main-thread finally.
+    # Console Ctrl handlers must return quickly on Windows.
+    icon = _tray_icon
+    if icon is not None:
+        try:
+            icon.stop()
+        except Exception:
+            pass
+
+
 def on_exit_clicked(icon, item):
-    set_headset_alert(False)
-    stop_flash_thread()
-    icon.stop()
-    sys.exit(0)
+    request_app_quit(0)
+
+
+def install_console_quit_handlers() -> None:
+    """Make Ctrl+C quit while the main thread is blocked in pystray.run().
+
+    Python's SIGINT check does not run during pystray's native Win32 message
+    loop, so Windows needs SetConsoleCtrlHandler. SIGINT still covers macOS/Linux
+    and any case where the interpreter can raise KeyboardInterrupt.
+    """
+    global _console_ctrl_handler
+
+    def _signal_quit(signum, frame):
+        request_app_quit(130)
+
+    signal.signal(signal.SIGINT, _signal_quit)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _signal_quit)
+    if sys.platform == "win32" and hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _signal_quit)
+
+    if sys.platform != "win32":
+        return
+
+    import ctypes
+
+    HandlerRoutine = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+    CTRL_C_EVENT = 0
+    CTRL_BREAK_EVENT = 1
+    CTRL_CLOSE_EVENT = 2
+
+    @HandlerRoutine
+    def _ctrl_handler(ctrl_type):
+        if ctrl_type in (CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT):
+            request_app_quit(130)
+            return True
+        return False
+
+    _console_ctrl_handler = _ctrl_handler
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(_console_ctrl_handler, True)
 
 def _parse_args(argv=None):
     p = argparse.ArgumentParser(description="Emotiv Epoc X LSL server")
@@ -454,6 +512,7 @@ if __name__ == "__main__":
 
     _instance_lock = enforce_single_instance()
     install_console_minimize_hook()
+    install_console_quit_handlers()
 
     _icon_normal, _icon_alert = load_tray_icons()
 
@@ -472,6 +531,9 @@ if __name__ == "__main__":
     # Start the tray icon loop (blocks the main thread)
     try:
         tray_icon.run()
+    except KeyboardInterrupt:
+        request_app_quit(130)
     finally:
         set_headset_alert(False)
         stop_flash_thread()
+    sys.exit(_app_exit_code)

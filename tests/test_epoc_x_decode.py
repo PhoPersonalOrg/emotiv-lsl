@@ -146,8 +146,39 @@ class TestMode7Decode(unittest.TestCase):
         expected = [words[i] / ADC_DIV_16BIT for i in EPOCX_RAW_EEG_ID_MODE7]
         for a, b in zip(eeg, expected):
             self.assertAlmostEqual(a, b, places=9)
-        # word7 CQ
-        self.assertEqual(cq, [float(words[7] & 0x7F)] * 14)
+        ## END for a, b in zip(eeg, expected)...
+
+        # counter=3 -> slot 3 (F7, 10-20 idx 1, div 235.0): (1007 * 0.25) / 235 = 1.071 -> grade 2
+        expected_cq = [0.0] * 14
+        expected_cq[1] = 2.0
+        self.assertEqual(cq, expected_cq)
+
+
+    def test_cq_demux_sticky_and_battery_hold(self):
+        words = [0] * 15
+        # Packet 1: counter=2 -> slot 2 (AF3, 10-20 idx 0, div 226.0), word7=1800 -> grade 4
+        words[7] = 1800
+        _, cq1 = self.headset.decode_eeg_mode7(_build_mode7_plain(2, 0x10, words))
+        expected = [0.0] * 14
+        expected[0] = 4.0
+        self.assertEqual(cq1, expected)
+
+        # Packet 2: counter=0 -> slot 0 (F3, 10-20 idx 2, div 212.0), word7=300 -> grade 1; AF3 holds 4
+        words[7] = 300
+        _, cq2 = self.headset.decode_eeg_mode7(_build_mode7_plain(0, 0x10, words))
+        expected[2] = 1.0
+        self.assertEqual(cq2, expected)
+
+        # Packet 3: counter=14 -> slot 14 (outside 0..13), holds previous state
+        words[7] = 5000
+        _, cq3 = self.headset.decode_eeg_mode7(_build_mode7_plain(14, 0x10, words))
+        self.assertEqual(cq3, expected)
+
+        # Packet 4: counter=127 (eeg_rate - 1 battery slot -> slot 63), battery byte does not overwrite CQ
+        words[7] = 0x004A
+        _, cq4 = self.headset.decode_eeg_mode7(_build_mode7_plain(127, 0x10, words))
+        self.assertEqual(cq4, expected)
+
 
     def test_skips_non_eeg_type(self):
         words = [0] * 15
@@ -156,9 +187,10 @@ class TestMode7Decode(unittest.TestCase):
         self.assertIsNone(eeg)
         self.assertIsNone(cq)
 
+
     def test_encrypted_roundtrip(self):
         words = [100 + i * 17 for i in range(15)]
-        words[7] = 0x12AB  # CQ low 7 bits = 0x2B
+        words[7] = 0x12AB  # full 16-bit word7 = 4779 -> grade 4 on counter=5 (slot 5 = P7, 10-20 idx 5)
         plain = _build_mode7_plain(5, 0x10, words)
         wire = _encrypt_wire(plain, self.key)
         eeg, cq = self.headset.decode_data(wire)
@@ -166,14 +198,24 @@ class TestMode7Decode(unittest.TestCase):
         expected = [words[i] / ADC_DIV_16BIT for i in EPOCX_RAW_EEG_ID_MODE7]
         for a, b in zip(eeg, expected):
             self.assertAlmostEqual(a, b, places=9)
-        self.assertEqual(cq[0], float(0x12AB & 0x7F))
+        ## END for a, b in zip(eeg, expected)...
+
+        expected_cq = [0.0] * 14
+        expected_cq[5] = 4.0
+        self.assertEqual(cq, expected_cq)
+
 
     def test_extract_quality_keymodel8(self):
         words = [0] * 15
-        words[7] = 0x0042
-        plain = _build_mode7_plain(1, 0x10, words)
+        words[7] = 1800  # counter=2 -> slot 2 (AF3, 10-20 idx 0) -> grade 4
+        plain = _build_mode7_plain(2, 0x10, words)
         q = self.headset.extractQualityValues(plain, return_as_array=True)
-        self.assertEqual(list(q), [0x42] * 14)
+        expected_cq = [0.0] * 14
+        expected_cq[0] = 4.0
+        self.assertEqual(list(q), expected_cq)
+        q_dict = self.headset.extractQualityValues(plain, return_as_array=False)
+        self.assertEqual(q_dict["AF3"], 4.0)
+        self.assertEqual(q_dict["F7"], 0.0)
 
     def test_convertEPOC_PLUS_approx_div78(self):
         # CyKit ≈ LE16 / 7.8 within float noise.
